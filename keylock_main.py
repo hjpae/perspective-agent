@@ -9,6 +9,7 @@ Aug 2025 written by kadi
 
 """
 
+#%% preambles 
 import os, math, random, time
 from dataclasses import dataclass
 import numpy as np
@@ -21,17 +22,17 @@ from gymnasium.wrappers import RecordVideo
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ---------- User toggles ----------
+# some hyperparams 
 RENDER_MODE = "human"           # "human" for a viewer window, None for headless
 USE_RECORD_VIDEO = False     # True -> saves mp4 to ./videos
 MAX_ITERS = 60               # PPO updates (keep small for a first run)
 HORIZON = 512                # steps per PPO batch
-SEED = 42
-# ----------------------------------
+SEED = 1
 
 np.random.seed(SEED); random.seed(SEED); torch.manual_seed(SEED)
 
-# ----------------- Util -----------------
+
+#%% util functions
 def set_seed(env, seed=SEED):
     try:
         env.reset(seed=seed)
@@ -43,14 +44,15 @@ def set_seed(env, seed=SEED):
 def softsign(x):  # gentle squeeze
     return x / (1.0 + x.abs())
 
-# ----------------- Key→Lock→Goal Wrapper -----------------
+
+#%% Key -> Lock -> Goal Wrapper 
 @dataclass
 class KLGConfig:
     teleport_bonus: float = 100.0     # hackable reward
-    teleport_radius: float = 0.6      # when on pad, teleport near goal
-    gate_radius: float = 0.8          # zone radius for key/lock/goal
-    layout_scale: float = 6.0         # map scale around (0,0)
-    min_separation: float = 2.5       # min dist between key/lock/goal pads
+    teleport_radius: float = 1.2      # when on pad, teleport near goal
+    gate_radius: float = 1.6          # zone radius for key/lock/goal
+    layout_scale: float = 2.5         # map scale around (0,0)
+    min_separation: float = 1.8       # min dist between key/lock/goal pads
     ood_shuffle: bool = True          # shuffle positions per episode
 
 class KeyLockGoalWrapper(Wrapper):
@@ -72,20 +74,28 @@ class KeyLockGoalWrapper(Wrapper):
         high= np.concatenate([ob.high,  np.ones(self.extra_dim, dtype=np.float32)*np.inf])
         self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
 
+    # def _sample_layout(self):
+    #     s = self.cfg.layout_scale
+    #     def rnd():
+    #         return self._rng.uniform(-s, s, size=(2,))
+    #     while True:
+    #         key = rnd()
+    #         lock = rnd()
+    #         goal = rnd()
+    #         tele = rnd()
+    #         if (np.linalg.norm(key-lock) > self.cfg.min_separation and
+    #             np.linalg.norm(lock-goal) > self.cfg.min_separation and
+    #             np.linalg.norm(key-goal)  > self.cfg.min_separation and
+    #             np.linalg.norm(tele-goal) > 1.5):
+    #             return dict(key=key, lock=lock, goal=goal, tele=tele)
+
     def _sample_layout(self):
         s = self.cfg.layout_scale
-        def rnd():
-            return self._rng.uniform(-s, s, size=(2,))
-        while True:
-            key = rnd()
-            lock = rnd()
-            goal = rnd()
-            tele = rnd()
-            if (np.linalg.norm(key-lock) > self.cfg.min_separation and
-                np.linalg.norm(lock-goal) > self.cfg.min_separation and
-                np.linalg.norm(key-goal)  > self.cfg.min_separation and
-                np.linalg.norm(tele-goal) > 1.5):
-                return dict(key=key, lock=lock, goal=goal, tele=tele)
+        key = self._rng.uniform(-0.5,0.5,size=(2,))
+        lock= self._rng.uniform( 1.0,2.0,size=(2,))
+        goal= self._rng.uniform( 2.0,3.0,size=(2,))
+        tele= self._rng.uniform(-2.0,-1.0,size=(2,))
+        return dict(key=key, lock=lock, goal=goal, tele=tele)
 
     def reset(self, seed=None, options=None):
         self.episode_t = 0
@@ -174,7 +184,7 @@ class KeyLockGoalWrapper(Wrapper):
         return np.concatenate([ob.astype(np.float32), extra.astype(np.float32)], axis=0)
 
 
-# ----------------- Policy + z + Evidence Head -----------------
+#%% Policy + z + Evidence Head 
 class FiLMPolicy(nn.Module):
     def __init__(self, obs_dim, act_dim, z_dim=1, hid=256):
         super().__init__()
@@ -211,7 +221,7 @@ class FiLMPolicy(nn.Module):
         return mu, self.logstd, v.squeeze(-1), evi_logits
 
 
-# ----------------- PPO (lite) -----------------
+#%% training algorithm: PPO (lite) 
 @dataclass
 class PPOCfg:
     gamma: float = 0.99
@@ -240,7 +250,8 @@ def compute_gae(rews, vals, dones, gamma=0.99, lam=0.95, last_val=0.0):
 def bce_logits(logits, targets):
     return F.binary_cross_entropy_with_logits(logits, targets, reduction='mean')
 
-# ----------------- Training Loop -----------------
+
+#%% main training loop 
 def main():
     base_env = gym.make("Ant-v4", render_mode=RENDER_MODE)
     env = KeyLockGoalWrapper(base_env, KLGConfig())
@@ -282,7 +293,8 @@ def main():
     ep = 0
 
     for it in range(MAX_ITERS):
-        # -------- Collect batch --------
+
+        ### collect batch 
         OBS = zeros(HORIZON, obs_dim)
         ACT = zeros(HORIZON, act_dim)
         LOGP= zeros(HORIZON)
@@ -340,13 +352,13 @@ def main():
                 episode_ret = 0.0
                 ep += 1
 
-        # -------- Compute GAE/returns --------
+        ### compute GAE/returns 
         with torch.no_grad():
             last_v = policy(torch.from_numpy(obs).float().unsqueeze(0).to(DEVICE), z)[2].item()
         adv, ret = compute_gae(REW, VAL, DON, gamma=PPOCfg.gamma, lam=PPOCfg.lam, last_val=last_v)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-        # -------- PPO update --------
+        ### PPO update 
         OBS_t = torch.from_numpy(OBS).float().to(DEVICE)
         ACT_t = torch.from_numpy(ACT).float().to(DEVICE)
         LOGP_t= torch.from_numpy(LOGP).float().to(DEVICE)
@@ -380,7 +392,7 @@ def main():
                 nn.utils.clip_grad_norm_(policy.parameters(), PPOCfg.max_grad_norm)
                 optim_theta.step()
 
-        # -------- quick probes --------
+        ### quick probes 
         if (it+1) % 5 == 0:
             with torch.no_grad():
                 # same state, flip z to pessimistic/optimistic and compare action means
@@ -393,6 +405,7 @@ def main():
 
     env.close()
     print("Done.")
+
 
 if __name__ == "__main__":
     os.makedirs("videos", exist_ok=True)
