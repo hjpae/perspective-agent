@@ -1,0 +1,115 @@
+\subsection*{Marker Suite (Proto-language analogues of RJM/MHC/IC)}
+
+\subsubsection*{(PL--RJM) Reflective Judgment under Uncertainty}
+\hdr{Intuition}
+Beyond emitting claims, mature agents \emph{ground} their assertions in externally verifiable evidence and \emph{revise} their stance upon counterevidence. PL--RJM tests whether agents (i) bind claims to evidence, (ii) update stances when evidence contradicts prior beliefs, and (iii) qualify claims under uncertainty.
+
+\hdr{Notation}
+At time $t$, let $m_t$ be the discrete message token, $e_t$ an externally verifiable evidence object, and $c_t$ a context descriptor. We detect \emph{acts} with a post-hoc probe:
+$m_t \mapsto \hat{c}_t \in \mathcal{C}$ (e.g., \texttt{claim}, \texttt{query}, \texttt{justify}, \dots).
+Let $\mathbf{1}\{\cdot\}$ denote an indicator, and define:
+\[
+C_t := \mathbf{1}\{\hat{c}_t=\texttt{claim}\},\quad
+B_t := \mathbf{1}\{\text{message $m_t$ contains a binding }\rho_t(e_t)\},\quad
+X_t := \mathbf{1}\{\text{new evidence contradicts prior stance}\}.
+\]
+Let $s_t \in \mathcal{S}$ be the agent's stance label (e.g., \texttt{for}/\texttt{against}/\texttt{uncertain}) inferred from behavior or messages; let $U_t$ indicate hedge/uncertainty markers (proto-language tokens mapped to a \texttt{hedge} class).
+
+\hdr{Operationalization}
+\begin{itemize}
+  \item \emph{Claim--evidence coherence (CEC).} Share of claims explicitly bound to evidence:
+  \[
+  \mathsf{CEC} \;=\; \frac{\sum_{t} C_t\,B_t}{\sum_t C_t}
+  \quad\text{(or equivalently }\mathbb{E}[C_t B_t]/\mathbb{E}[C_t]\text{)}.
+  \]
+  \item \emph{Counterevidence updating (CU).} Probability of stance revision upon contradiction:
+  \[
+  \mathsf{CU} \;=\; \Pr\big(s_{t}\neq s_{t-1}\,\big|\,X_t=1\big).
+  \]
+  To avoid oscillatory flip--flops, we also track an \emph{oscillation penalty}
+  $\mathsf{OP} := \frac{1}{|W|}\sum_{t\in W}\mathbf{1}\{s_{t}\neq s_{t-1}\}$ over a window $W$.
+  \item \emph{Qualification rate.} Hedge/uncertainty usage following contested claims:
+  \[
+  \mathsf{QR} \;=\; \frac{\sum_t U_t\,\mathbf{1}\{\text{claim at $t$ is contested}\}}{\sum_t \mathbf{1}\{\text{claim at $t$ is contested}\}}.
+  \]
+\end{itemize}
+
+\hdr{Success signal}
+High $\mathsf{CEC}$; non-zero $\mathsf{CU}$ with low $\mathsf{OP}$ (settled but corrigible); and increased $\mathsf{QR}$ when claims are contested.
+
+\hdr{Estimation notes}
+Metrics are computed on sliding windows with bootstrap CIs; we recommend \emph{iso-accuracy controls} (match task success, compare only structural markers) and \emph{dose--response} checks (monotone shifts under evidence noise/strength).
+
+\divider
+
+\subsubsection*{(PL--MHC) Hierarchical Rule Integration}
+\hdr{Intuition}
+Mature reasoning composes multi-step rules, coordinates subroutines, and transfers plan templates across contexts. PL--MHC quantifies the \emph{depth}, \emph{coordination}, and \emph{transferability} of action--message programs that explain observed trajectories.
+
+\hdr{Plan extraction}
+From a trajectory $\tau=\{(o_t,a_t,m_t)\}_{t=1}^T$ we infer a minimal control-flow graph $G=(V,E)$ (e.g., by policy sketching/option discovery or by canonicalizing behavior into a program DAG). Let $\mathrm{depth}(G)$ be the longest root-to-leaf path length; let $\mathcal{R}$ denote distinct subrules (conditions, options) used in $G$.
+
+\hdr{Operationalization}
+\begin{itemize}
+  \item \emph{Program depth (PD).} Minimal control-flow depth explaining $\tau$:
+  \[
+  \mathsf{PD} \;=\; \mathrm{depth}(G).
+  \]
+  \item \emph{Rule coordination (RC).} Number of distinct subrules jointly invoked without contradiction:
+  \[
+  \mathsf{RC} \;=\; |\mathcal{R}|\;-\;\text{conflict\_count}(\mathcal{R}).
+  \]
+  \item \emph{Cross-context transfer (CT).} Reuse of the same plan template under context swap $c\!\to\!c'$:
+  \[
+  \mathsf{CT} \;=\; \Pr\big(\text{template}(G_c)\text{ succeeds in }c'\big),
+  \]
+  estimated by executing templates across held-out contexts and scoring success.
+\end{itemize}
+
+\hdr{Success signal}
+$\mathsf{PD}$/$\mathsf{RC}$ exceed reactive baselines; under truncations (memory, time) performance degrades \emph{smoothly} (no catastrophic collapse). $\mathsf{CT}$ remains above chance under context swaps.
+
+\hdr{Estimation notes}
+Depth can be bounded via inferred option stacks or by MDL (minimum description length) of policy programs; rule conflicts are flagged when guards/actions are mutually unsatisfiable.
+
+\divider
+
+\subsubsection*{(PL--IC) Integrative Complexity in Multi-agent Discourse}
+\hdr{Intuition}
+Groups with mature reasoning \emph{differentiate} perspectives (maintain non-trivial diversity) yet \emph{integrate} them into joint commitments after evidence exchange. PL--IC captures this balance and penalizes mere herding.
+
+\hdr{Notation}
+Let $i\in\{1,\dots,N\}$ index agents and $\mathcal{S}$ the stance space over proposals. Let $\mathbf{s}^i_{t}\in\Delta^{|\mathcal{S}|}$ be agent $i$'s stance distribution at time $t$ (inferred from actions/messages), and $\bar{\mathbf{s}}_{t} := \frac{1}{N}\sum_i \mathbf{s}^i_{t}$ the group mean.
+
+\hdr{Operationalization}
+\begin{itemize}
+  \item \emph{Differentiation.} Entropy of the stance distribution across viewpoints:
+  \[
+  H(\mathbf{s}_t) \;=\; -\sum_{s\in\mathcal{S}}\bar{\mathbf{s}}_{t}(s)\,\log \bar{\mathbf{s}}_{t}(s).
+  \]
+  \item \emph{Integration ($\mathsf{Agree}^{\star}$).} Evidence-weighted consensus index post exchange:
+  \[
+  \mathsf{Agree}^{\star}_t \;=\; 1 - \frac{1}{N}\sum_{i=1}^{N} D_{\mathrm{JS}}\!\big(\mathbf{s}^i_{t}\,\Vert\,\bar{\mathbf{s}}_{t}\big)\;-\;\eta\,\mathbf{1}\{H(\mathbf{s}_t)<H_{\min}\},
+  \]
+  where $D_{\mathrm{JS}}$ is the Jensen--Shannon divergence; the penalty term discourages trivial collapse.
+  \item \emph{Composite index.}
+  \[
+  \mathsf{PL\text{-}IC}_t \;=\; \alpha\,H(\mathbf{s}_t) \;+\; \beta\,\mathsf{Agree}^{\star}_t \;-\; \gamma\,\text{contradiction\_rate}_t,
+  \]
+  with $\alpha,\beta,\gamma>0$. Here \texttt{contradiction\_rate} counts simultaneous mutually exclusive commitments within/between agents.
+\end{itemize}
+
+\hdr{Success signal}
+Non-trivial $H(\mathbf{s}_t)$ (differentiation) together with rising $\mathsf{Agree}^{\star}_t$ after evidence sharing, and low contradiction rates (integration without herding).
+
+\hdr{Estimation notes}
+Stances can be obtained via a lightweight probe on messages or via inverse-RL over actions; consensus is computed \emph{after} explicit evidence-binding phases to separate persuasion from evidence-driven integration. Use iso-accuracy and dose--response checks (e.g., increase distractor salience, expect monotone degradation).
+
+\divider
+
+\paragraph{Common analysis controls (for all markers).}
+\begin{itemize}
+  \item \emph{Iso-accuracy controls:} match task success and compare structural markers only.
+  \item \emph{Dose--response:} vary stressor strength (evidence noise, time pressure, distractor salience) and test for monotonic shifts.
+  \item \emph{Ablations:} remove evidence-binding or gating; expect selective drops (e.g., $\mathsf{CEC}\downarrow$, $\mathsf{PD}\downarrow$) without global collapse.
+\end{itemize}
