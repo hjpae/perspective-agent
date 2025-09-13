@@ -1,0 +1,17 @@
+# Core
+python==3.11.7        # MettaGrid 0.2 build confirmed python version
+
+# MettaGrid env + adapters
+mettagrid==0.2
+gymnasium>=0.29
+pettingzoo>=1.24
+
+# Analysis / plotting
+numpy>=1.26
+pandas>=2.2
+matplotlib>=3.9
+
+# Optional (animation MP4/GIF export)
+imageio>=2.34
+imageio-ffmpeg>=0.5
+pillow>=10.3
