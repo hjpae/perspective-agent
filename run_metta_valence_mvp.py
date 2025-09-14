@@ -26,6 +26,94 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# ---- Robust importer for MettaGrid 0.16/0.2 path differences ----
+def _resolve_env(adapter: str):
+    """
+    Resolve MettaGrid env constructor across versions.
+    Returns (callable_make_env, where_str).
+    """
+    import importlib, inspect
+
+    if adapter == "pettingzoo":
+        # 0.16에는 pettingzoo가 없음: 곧바로 안내 에러
+        raise ImportError(
+            "[MettaGrid import resolver] This MettaGrid build has no PettingZoo adapter. "
+            "Use --adapter gym or --adapter builtin."
+        )
+
+    if adapter == "gym":
+        errs = []
+
+        # ---- 1) 0.16 스타일: mettagrid.gym_wrapper 안에서 생성자/팩토리 찾기
+        try:
+            gw = importlib.import_module("mettagrid.gym_wrapper")
+            # 후보 이름들: 버전마다 달라질 수 있어 전부 시도
+            for name in ["MettaGridGymEnv", "GymWrapper", "make_env", "make", "create_env", "Env"]:
+                if hasattr(gw, name):
+                    obj = getattr(gw, name)
+                    if inspect.isclass(obj):
+                        # 클래스면 인자 없이 만들어보는 람다를 반환 (필요시 나중에 인자 추가)
+                        return (lambda **kw: obj(**kw) if kw else obj()), f"mettagrid.gym_wrapper.{name}"
+                    if callable(obj):
+                        # 팩토리 함수면 그대로 반환
+                        return (lambda **kw: obj(**kw)), f"mettagrid.gym_wrapper.{name}()"
+            # 못 찾았으면, 모듈 내에서 이름에 'env'가 들어간 callables를 스캔
+            for k, v in gw.__dict__.items():
+                if ("env" in k.lower() or "gym" in k.lower()) and callable(v):
+                    return (lambda **kw: v(**kw)), f"mettagrid.gym_wrapper.{k}()"
+        except Exception as e:
+            errs.append(f"mettagrid.gym_wrapper: {e.__class__.__name__}: {e}")
+
+        # ---- 2) 마지막 폴백: mettagrid.mettagrid_env 안의 Env 클래스를 감싸기
+        try:
+            me = importlib.import_module("mettagrid.mettagrid_env")
+            # Env 같은 이름을 찾아서 최소 래퍼를 씌움
+            for k, v in me.__dict__.items():
+                if inspect.isclass(v) and ("Env" in k or "Environment" in k):
+                    BaseEnv = v
+
+                    # 간단 래퍼 (reset/step 시그니처를 gymnasium 스타일로)
+                    class _GymLike:
+                        def __init__(self, **kw):
+                            self._env = BaseEnv(**kw) if kw else BaseEnv()
+
+                        def reset(self, seed=None):
+                            if hasattr(self._env, "reset"):
+                                out = self._env.reset(seed=seed) if seed is not None else self._env.reset()
+                                # (obs, info) 형태로 정규화
+                                if isinstance(out, tuple) and len(out)==2:
+                                    return out
+                                return out, {}
+                            return {}, {}
+
+                        def step(self, actions):
+                            # actions: [a0, a1] 형태를 기대
+                            if hasattr(self._env, "step"):
+                                out = self._env.step(actions)
+                                # (obs, rew, term, trunc, info) 형태로 정규화
+                                if isinstance(out, tuple) and len(out) == 5:
+                                    return out
+                                # 못 맞추면 대충 빈 값이라도 반환
+                                return out, 0.0, False, False, {}
+                            raise RuntimeError("Underlying env has no step()")
+
+                    return (lambda **kw: _GymLike(**kw)), f"mettagrid.mettagrid_env.{k} (wrapped)"
+        except Exception as e:
+            errs.append(f"mettagrid.mettagrid_env: {e.__class__.__name__}: {e}")
+
+        tried = "\n  - " + "\n  - ".join(errs) if errs else ""
+        raise ImportError(
+            "[MettaGrid import resolver] Could not resolve a gym environment. "
+            f"Tried:{tried}\n"
+            "Tips:\n"
+            "  • This build exposes gym via mettagrid.gym_wrapper in many cases.\n"
+            "  • If API mismatches remain, use --adapter builtin (no external deps)."
+        )
+
+    raise ValueError(f"Unknown adapter: {adapter}")
+
+
+
 # ---------- Hyperparameters ----------
 EPISODES = 4
 STEPS    = 800
@@ -145,8 +233,12 @@ def run_pettingzoo(no_context:bool, no_longg:bool, save_mp4:str=None):
     if no_context: W_CROWD = 0.0
     if no_longg:   G_ALPHA = 0.0
 
-    mod = importlib.import_module("mettagrid.adapters.pettingzoo_env")
-    MakeEnv = getattr(mod, "MettaGridPettingZooEnv")
+    #mod = importlib.import_module("mettagrid.adapters.pettingzoo_env")
+    #MakeEnv = getattr(mod, "MettaGridPettingZooEnv")
+
+    # NEW (robust across 0.2/0.16):
+    MakeEnv, where = _resolve_env("pettingzoo")
+    print(f"[info] Using env: {where}")
     env = MakeEnv()
     aec = env.aec_env
     grid_w, grid_h = 40, 40  # adjust if env exposes size
@@ -219,22 +311,94 @@ def run_pettingzoo(no_context:bool, no_longg:bool, save_mp4:str=None):
     df=pd.DataFrame(logs)
     return df, frames
 
-def run_gym(no_context:bool, no_longg:bool, save_mp4:str=None):
+def run_gym(no_context: bool, no_longg: bool, save_mp4: str = None):
     global W_CROWD, G_ALPHA
     if no_context: W_CROWD = 0.0
     if no_longg:   G_ALPHA = 0.0
 
-    mod = importlib.import_module("mettagrid.adapters.gym_env")
-    MakeEnv = getattr(mod, "MettaGridGymEnv")
-    env = MakeEnv()
+    import importlib, inspect
+
+    # 0.16용 진입점 탐색: mettagrid.gym_wrapper
+    gw = importlib.import_module("mettagrid.gym_wrapper")
+
+    MakeEnv = None
+    tried = []
+
+    # 1) 흔한 팩토리 이름들
+    for name in ["make_env", "make", "create_env"]:
+        if hasattr(gw, name) and callable(getattr(gw, name)):
+            _f = getattr(gw, name)
+            def MakeEnv(**kw):
+                return _f(**kw)
+            where = f"mettagrid.gym_wrapper.{name}()"
+            break
+        tried.append(name)
+
+    # 2) 클래스 이름들
+    if MakeEnv is None:
+        for name in ["MettaGridGymEnv", "GymWrapper", "Env"]:
+            if hasattr(gw, name) and inspect.isclass(getattr(gw, name)):
+                Cls = getattr(gw, name)
+                def MakeEnv(**kw):
+                    return Cls(**kw)
+                where = f"mettagrid.gym_wrapper.{name}"
+                break
+            tried.append(name)
+
+    # 3) 이름에 env/gym가 들어간 callable 아무거나
+    if MakeEnv is None:
+        for k, v in gw.__dict__.items():
+            if callable(v) and ("env" in k.lower() or "gym" in k.lower()):
+                def _make(v_):
+                    def _MakeEnv(**kw):
+                        return v_(**kw)
+                    return _MakeEnv
+                MakeEnv = _make(v)
+                where = f"mettagrid.gym_wrapper.{k}()"
+                break
+
+    if MakeEnv is None:
+        raise ImportError(
+            "[MettaGrid gym] Could not find a constructor in mettagrid.gym_wrapper. "
+            f"Tried names: {tried}"
+        )
+
+    print(f"[info] Using env from {where}")
+    env = MakeEnv()  # 인자 없는 기본 생성부터 시도
+
     grid_w, grid_h = 40, 40
     agents=[ValenceAgent(0,0), ValenceAgent(1,0)]
     frames=[]
     logs=[]
 
+    # reset 표준화: (obs, info)
+    def _reset(seed=None):
+        try:
+            if hasattr(env.reset, "__code__") and "seed" in env.reset.__code__.co_varnames:
+                out = env.reset(seed=seed)
+            else:
+                out = env.reset()
+        except TypeError:
+            out = env.reset()
+        return out if (isinstance(out, tuple) and len(out)==2) else (out, {})
+
+    # step 표준화: (obs, rew, term, trunc, info)
+    def _step(actions):
+        out = env.step(actions)
+        if isinstance(out, tuple):
+            if len(out)==5:
+                return out
+            if len(out)==4:  # (obs, rew, done, info)
+                obs, rew, done, info = out
+                term = bool(done); trunc = False
+                return obs, rew, term, trunc, info
+        # 최후 폴백
+        return out, 0.0, False, False, {}
+
     for ep in range(EPISODES):
-        obs, info = env.reset(seed=ep)
-        # Attempt to autodetect xy keys from obs[0]
+        obs, info = _reset(seed=ep)
+
+        # obs[0]/obs[1]이 dict라고 가정, 아니면 기본값
         try:
             xk,yk = autodetect_xy(obs[0])
         except Exception:
@@ -250,12 +414,14 @@ def run_gym(no_context:bool, no_longg:bool, save_mp4:str=None):
 
             a0 = agents[0].pick_action((x0,y0), [(x1,y1)], grid_w, grid_h)
             a1 = agents[1].pick_action((x1,y1), [(x0,y0)], grid_w, grid_h)
-            obs, rew, term, trunc, info = env.step([a0,a1])
+
+            obs, rew, term, trunc, info = _step([a0,a1])
 
             zid0,zid1 = zone_of(x0,y0,grid_w,grid_h), zone_of(x1,y1,grid_w,grid_h)
-            v0 = extract_signal(obs[0], ZONE_MU[zid0])
-            v1 = extract_signal(obs[1], ZONE_MU[zid1])
+            v0 = extract_signal(obs[0], ZONE_MU[zid0]) if isinstance(obs, (list,tuple)) else ZONE_MU[zid0]
+            v1 = extract_signal(obs[1], ZONE_MU[zid1]) if isinstance(obs, (list,tuple)) else ZONE_MU[zid1]
             pe0,pe1 = abs(float(v0)-ZONE_MU[zid0]), abs(float(v1)-ZONE_MU[zid1])
+
             for aid,(zid,pe) in enumerate([(zid0,pe0),(zid1,pe1)]):
                 pe_z={0:ZONE_STD[0],1:ZONE_STD[1],2:ZONE_STD[2]}; pe_z[zid]=pe
                 if not no_longg: agents[aid].update_g(zid)
@@ -280,6 +446,70 @@ def run_gym(no_context:bool, no_longg:bool, save_mp4:str=None):
 
     df=pd.DataFrame(logs)
     return df, frames
+
+def run_builtin(no_context: bool, no_longg: bool, save_mp4: str = None):
+    global W_CROWD, G_ALPHA
+    if no_context: W_CROWD = 0.0
+    if no_longg:   G_ALPHA = 0.0
+
+    grid_w, grid_h = 40, 40
+    agents = [ValenceAgent(0,0), ValenceAgent(1,0)]
+    rng = np.random.default_rng(0)
+
+    def clip_xy(x,y):
+        return int(np.clip(x,0,grid_w-1)), int(np.clip(y,0,grid_h-1))
+
+    frames=[]; logs=[]
+
+    for ep in range(EPISODES):
+        x0,y0 = int(rng.integers(0,grid_w//2)), int(rng.integers(0,grid_h))
+        x1,y1 = int(rng.integers(grid_w//2,grid_w)), int(rng.integers(0,grid_h))
+
+        for t in range(STEPS):
+            a0 = agents[0].pick_action((x0,y0), [(x1,y1)], grid_w, grid_h)
+            dx0,dy0 = [(0,0),(0,-1),(0,1),(-1,0),(1,0)][a0]
+            nx0,ny0 = clip_xy(x0+dx0, y0+dy0)
+
+            a1 = agents[1].pick_action((x1,y1), [(nx0,ny0)], grid_w, grid_h)
+            dx1,dy1 = [(0,0),(0,-1),(0,1),(-1,0),(1,0)][a1]
+            nx1,ny1 = clip_xy(x1+dx1, y1+dy1)
+
+            zid0,zid1 = zone_of(nx0,ny0,grid_w,grid_h), zone_of(nx1,ny1,grid_w,grid_h)
+            v0 = float(ZONE_MU[zid0] + rng.normal(0, ZONE_STD[zid0]))
+            v1 = float(ZONE_MU[zid1] + rng.normal(0, ZONE_STD[zid1]))
+            pe0,pe1 = abs(v0-ZONE_MU[zid0]), abs(v1-ZONE_MU[zid1])
+
+            for aid,(zid,pe) in enumerate([(zid0,pe0),(zid1,pe1)]):
+                pe_z = {0:ZONE_STD[0],1:ZONE_STD[1],2:ZONE_STD[2]}
+                pe_z[zid] = pe
+                if not no_longg:
+                    agents[aid].update_g(zid)
+                agents[aid].update_valence(pe_z)
+
+            conflict = 1 if cheby((nx0,ny0),(nx1,ny1))<=1 else 0
+            coop     = 1 if zid0!=zid1 else 0
+            logs.append({"ep":ep,"t":t,"conflict":conflict,"coop":coop})
+
+            x0,y0 = nx0,ny0
+            x1,y1 = nx1,ny1
+
+            if save_mp4:
+                fig,ax=plt.subplots(figsize=(4,4))
+                ax.set_xlim(0,grid_w); ax.set_ylim(0,grid_h)
+                ax.axvline(grid_w//2, linestyle="--")
+                ax.axhline(grid_h//2, xmin=0.5, linestyle="--")
+                ax.scatter([x0,x1],[y0,y1])
+                ax.set_title(f"ep{ep} t{t}")
+                fig.canvas.draw()
+                frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+                frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                frames.append(frame)
+                plt.close(fig)
+
+    df = pd.DataFrame(logs)
+    return df, frames
+
+
 
 def plot_metrics(df: pd.DataFrame, title: str):
     tvals = sorted(df["t"].unique())
@@ -334,35 +564,60 @@ def summarize(df: pd.DataFrame, label:str)->Dict[str,float]:
     }
 
 def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument("--adapter", choices=["pettingzoo","gym"], default="pettingzoo")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--adapter", choices=["pettingzoo","gym","builtin"], default="gym")
     ap.add_argument("--no-context", action="store_true")
     ap.add_argument("--no-longg", action="store_true")
     ap.add_argument("--save-mp4", type=str, default=None)
-    args=ap.parse_args()
+    args = ap.parse_args()
 
-    runner = run_pettingzoo if args.adapter=="pettingzoo" else run_gym
+    # runner 선택
+    if args.adapter == "pettingzoo":
+        runner = run_pettingzoo
+    elif args.adapter == "gym":
+        runner = run_gym
+    else:
+        runner = run_builtin
 
-    # Baseline
-    df_base, frames = runner(no_context=args.no_context, no_longg=args.no_longg, save_mp4=args.save_mp4)
+    # Baseline (임포트 실패 시 builtin으로 자동 전환)
+    try:
+        df_base, frames = runner(no_context=args.no_context, no_longg=args.no_longg, save_mp4=args.save_mp4)
+    except ImportError as e:
+        print(f"[warn] {e}\n[info] Falling back to --adapter builtin")
+        df_base, frames = run_builtin(no_context=args.no_context, no_longg=args.no_longg, save_mp4=args.save_mp4)
+
+    # 베이스라인 플롯 & 요약
     plot_metrics(df_base, "baseline" if not (args.no_context or args.no_longg) else "custom")
     s1 = summarize(df_base, "baseline/custom")
 
-    # Ablations (only if baseline had both on)
-    rows=[s1]
+    # Ablations (baseline이 둘 다 켜진 상태일 때만)
+    rows = [s1]
     if not args.no_context and not args.no_longg:
-        df_noctx,_ = runner(no_context=True, no_longg=False, save_mp4=None)
-        df_nog,_   = runner(no_context=False, no_longg=True, save_mp4=None)
+        # no-context
+        try:
+            df_noctx, _ = runner(no_context=True, no_longg=False, save_mp4=None)
+        except ImportError:
+            df_noctx, _ = run_builtin(no_context=True, no_longg=False, save_mp4=None)
         plot_metrics(df_noctx, "no_context")
-        plot_metrics(df_nog,   "no_longG")
-        rows += [summarize(df_noctx,"no_context"), summarize(df_nog,"no_longG")]
 
+        # no-longG
+        try:
+            df_nog, _ = runner(no_context=False, no_longg=True, save_mp4=None)
+        except ImportError:
+            df_nog, _ = run_builtin(no_context=False, no_longg=True, save_mp4=None)
+        plot_metrics(df_nog, "no_longG")
+
+        rows += [summarize(df_noctx, "no_context"),
+                 summarize(df_nog,   "no_longG")]
+
+    # 요약 테이블 출력
     summ = pd.DataFrame(rows)
     print("\n=== MVP summary ===")
     print(summ.to_string(index=False))
 
-    if args.save_mp4 and len(frames)>0:
+    # 애니메이션 저장
+    if args.save_mp4 and len(frames) > 0:
         save_animation_mp4(frames, args.save_mp4)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
