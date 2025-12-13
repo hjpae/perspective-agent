@@ -1,0 +1,35 @@
+cear_pilot/
+  README.md
+  requirements.txt
+
+  envs/
+    nzone_grid.py            # Gymnasium Env
+
+  models/
+    encoder.py               # x_t -> z_t, p_t -> s_t
+    world_latent.py          # (s_t, z_t, g_{t-1}) -> g_t (slow RNN/GRU)
+    policy.py                # pi(a|s_t,g_t)
+    agent.py                 # step(), update(), get_latents()
+
+  training/
+    train.py                 # 학습 루프 (rollout + update)
+    replay.py                # (optional) replay buffer
+
+  experiments/
+    run_collect.py           # trained agent로 episodes 돌리고 로그 저장
+    run_ablation.py          # g_t off/on 비교 실행
+    run_perturb.py           # perturb harness 실행
+
+  analysis/
+    embed_latents.py         # PCA/UMAP fit + embedding 저장
+    figure_attractor.py      # Figure A
+    figure_ablation.py       # Figure B
+    figure_perturb.py        # Figure C
+    metrics.py               # recovery time, silhouette, drift 등 
+
+  outputs/
+    runs/<timestamp>/
+      traj.parquet           # step-level logs
+      meta.json
+      figs/
+        fig_abc.png
