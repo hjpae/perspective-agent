@@ -41,7 +41,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=80000)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
 
     ap.add_argument("--w_smooth", type=float, default=0.25)
