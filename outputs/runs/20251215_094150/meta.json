@@ -1,0 +1,11 @@
+{
+  "mode": "ablation",
+  "ckpt": "/home/hjpae/cear-demo/outputs/runs/20251215_090437/ckpt.pt",
+  "episodes": 30,
+  "device": "cpu",
+  "greedy": true,
+  "runs": {
+    "g_on": "outputs/runs/20251215_094150/g_on",
+    "g_off": "outputs/runs/20251215_094150/g_off"
+  }
+}
