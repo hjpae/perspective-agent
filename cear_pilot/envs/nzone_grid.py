@@ -3,16 +3,16 @@
 """
 N-zone Gridworld (Gymnasium Env)
 
-- 2D grid split into 3 vertical zones (0/1/2)
-- Observation: noisy vector whose mean depends on current zone_id
-- No external reward (reward=0.0) by default; the point is to study latent dynamics.
+Patched for:
+- active exploration (anti-stall)
+- UI-friendly RGB rendering
+- Phase-1 compatible intrinsic pressures only
+
+Zones:
+  3 vertical zones (0 / 1 / 2)
 
 Actions:
   0: up, 1: down, 2: left, 3: right, 4: stay
-
-Gymnasium API:
-  obs, info = env.reset(seed=...)
-  obs, reward, terminated, truncated, info = env.step(action)
 """
 
 from __future__ import annotations
@@ -31,6 +31,9 @@ except Exception as e:
     ) from e
 
 
+# -------------------------
+# Config
+# -------------------------
 @dataclass
 class NZoneConfig:
     width: int = 15
@@ -44,21 +47,27 @@ class NZoneConfig:
     # per-zone observation noise (hazard noisier)
     zone_sigma: Tuple[float, float, float] = (0.25, 0.40, 0.70)
 
-    # if True, include (x,y) normalized coordinates in obs tail (adds 2 dims)
+    # include normalized (x,y) in obs tail
     include_xy: bool = False
 
+    # ---- intrinsic pressures (NEW) ----
+    step_penalty: float = 0.01      # time cost (always)
+    stall_penalty: float = 0.05     # extra cost if no movement
+    novel_bonus: float = 0.05       # bonus for visiting a new cell
 
+
+# -------------------------
+# Env
+# -------------------------
 class NZoneGridEnv(gym.Env):
     """
-    A minimal gridworld for Phase-1 pilot runs.
-
-    The main thing you care about: zone identity induces a stable signal in observation
-    space that a slow latent can form basins over.
-
-    Reward is 0 by default (you can extend later).
+    Phase-1 gridworld:
+    - no extrinsic task reward
+    - intrinsic time / novelty pressures only
+    - designed to prevent trivial 'stall' solutions
     """
 
-    metadata = {"render_modes": ["human"], "render_fps": 8}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 8}
 
     def __init__(self, config: Optional[NZoneConfig] = None, render_mode: Optional[str] = None):
         super().__init__()
@@ -74,13 +83,12 @@ class NZoneGridEnv(gym.Env):
 
         self.action_space = spaces.Discrete(5)
 
-        # Observation is unbounded (noise); we bound loosely for Gymnasium.
         high = np.ones((self.obs_dim,), dtype=np.float32) * 10.0
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
         self._rng = np.random.default_rng(0)
 
-        # zone prototype means in observation space
+        # zone prototype means
         self._zone_mu = np.zeros((3, self.base_obs_dim), dtype=np.float32)
         self._zone_sigma = np.array(self.cfg.zone_sigma, dtype=np.float32)
 
@@ -88,6 +96,9 @@ class NZoneGridEnv(gym.Env):
         self.x = 0
         self.y = 0
         self.t = 0
+
+        # visited cells (NEW)
+        self.visited = set()
 
         self._init_zone_prototypes(seed=0)
 
@@ -101,7 +112,6 @@ class NZoneGridEnv(gym.Env):
         self._zone_mu = base * float(self.cfg.zone_mu_scale)
 
     def zone_id(self) -> int:
-        # split into 3 vertical zones by x coordinate
         if self.x < self.W / 3:
             return 0
         elif self.x < 2 * self.W / 3:
@@ -117,7 +127,10 @@ class NZoneGridEnv(gym.Env):
         obs = mu + self._rng.normal(0, sigma, size=(self.base_obs_dim,)).astype(np.float32)
 
         if self.cfg.include_xy:
-            obs_xy = np.array([self.x / max(1, self.W - 1), self.y / max(1, self.H - 1)], dtype=np.float32)
+            obs_xy = np.array(
+                [self.x / max(1, self.W - 1), self.y / max(1, self.H - 1)],
+                dtype=np.float32,
+            )
             obs = np.concatenate([obs, obs_xy], axis=0)
 
         return obs.astype(np.float32)
@@ -135,41 +148,53 @@ class NZoneGridEnv(gym.Env):
 
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-            # also re-sample zone prototypes deterministically from seed (optional but nice)
             self._init_zone_prototypes(seed=seed)
 
-        # start in center
         self.x = self.W // 2
         self.y = self.H // 2
         self.t = 0
+
+        self.visited = set()
+        self.visited.add((self.x, self.y))
 
         obs = self._observe()
         info = {"zone_id": self.zone_id(), "x": self.x, "y": self.y, "t": self.t}
         return obs, info
 
     def step(self, action: int):
+        old_pos = (self.x, self.y)
+
         # Apply action
-        if action == 0:  # up
+        if action == 0:      # up
             self.y = max(0, self.y - 1)
-        elif action == 1:  # down
+        elif action == 1:    # down
             self.y = min(self.H - 1, self.y + 1)
-        elif action == 2:  # left
+        elif action == 2:    # left
             self.x = max(0, self.x - 1)
-        elif action == 3:  # right
+        elif action == 3:    # right
             self.x = min(self.W - 1, self.x + 1)
-        elif action == 4:  # stay
+        elif action == 4:    # stay
             pass
         else:
             raise ValueError(f"Invalid action: {action}")
 
         self.t += 1
+        new_pos = (self.x, self.y)
+        moved = new_pos != old_pos
 
         obs = self._observe()
 
-        # No extrinsic reward (Phase-1); keep 0.0.
-        reward = 0.0
+        # ---- intrinsic reward shaping (NEW) ----
+        reward = -self.cfg.step_penalty
 
-        terminated = False  # no terminal states
+        if not moved:
+            reward -= self.cfg.stall_penalty
+
+        if moved and new_pos not in self.visited:
+            reward += self.cfg.novel_bonus
+            self.visited.add(new_pos)
+
+        terminated = False
         truncated = self.t >= self.max_steps
 
         info = {
@@ -180,19 +205,63 @@ class NZoneGridEnv(gym.Env):
         }
         return obs, reward, terminated, truncated, info
 
+    # -----------------
+    # Rendering
+    # -----------------
     def render(self):
-        # Minimal ASCII render
+        if self.render_mode == "rgb_array":
+            return self._render_rgb()
+        else:
+            self._render_ascii()
+
+    def _render_ascii(self):
         grid = [["." for _ in range(self.W)] for _ in range(self.H)]
         grid[self.y][self.x] = "A"
         s = "\n".join("".join(row) for row in grid)
         print(s)
         print(f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y})")
 
+    def _render_rgb(self):
+        cell = 24
+        img = np.zeros((self.H * cell, self.W * cell, 3), dtype=np.uint8)
+
+        zone_colors = np.array(
+            [
+                [220, 220, 220],  # zone 0
+                [200, 230, 255],  # zone 1
+                [255, 210, 210],  # zone 2
+            ],
+            dtype=np.uint8,
+        )
+
+        for y in range(self.H):
+            for x in range(self.W):
+                zid = 0
+                if x >= self.W / 3 and x < 2 * self.W / 3:
+                    zid = 1
+                elif x >= 2 * self.W / 3:
+                    zid = 2
+
+                y0, y1 = y * cell, (y + 1) * cell
+                x0, x1 = x * cell, (x + 1) * cell
+                img[y0:y1, x0:x1] = zone_colors[zid]
+
+        # agent (black square)
+        ay, ax = self.y, self.x
+        y0, y1 = ay * cell, (ay + 1) * cell
+        x0, x1 = ax * cell, (ax + 1) * cell
+        img[y0:y1, x0:x1] = np.array([0, 0, 0], dtype=np.uint8)
+
+        # grid lines
+        img[::cell, :, :] = 0
+        img[:, ::cell, :] = 0
+
+        return img
+
     def close(self):
         pass
 
 
-# Convenience factory (optional)
 def make_env(**kwargs) -> NZoneGridEnv:
     cfg = NZoneConfig(**kwargs)
     return NZoneGridEnv(config=cfg)

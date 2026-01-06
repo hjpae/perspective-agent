@@ -1,13 +1,46 @@
-#%% initial training 
+#%% initial training (NO pygame viewer - quick training) 
 import sys
-sys.path.append(".")
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cear_pilot.training.train import main
 
 if __name__ == "__main__":
+    sys.argv = [
+        str(Path(__file__).name),
+        "--device", "cpu",          # or "cuda"
+        "--steps", "80000",
+        # "--view"  # NOT set
+    ]
     main()
 
-# %autoreload 2
+#%% initial training (WITH pygame viewer)
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+        str(Path(__file__).name),
+        "--device", "cpu",          # or "cuda"
+        "--steps", "80000",
+
+        "--view",
+        "--view_every", "2",
+        "--view_fps", "20",
+        "--view_cell_px", "42",
+    ]
+    main()
 
 #%% one script for all (root)
 from pathlib import Path
