@@ -70,7 +70,7 @@ run_module("cear_pilot.analysis.figure_attractor", [
     "--lines",
 ])
 print("Figure A done for:", collect_run)
-
+#%%
 # -----------------------
 # B) Ablation + Figure B
 # -----------------------
