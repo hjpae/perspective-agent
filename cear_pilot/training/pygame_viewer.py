@@ -50,9 +50,9 @@ class PygameGridViewer:
         self.paused = False
 
         self.zone_colors = [
-            (35, 55, 90),
-            (40, 75, 55),
             (85, 55, 40),
+            (40, 75, 55),
+            (35, 55, 90),
         ]
         self.grid_line = (25, 25, 25)
         self.agent_color = (230, 230, 230)

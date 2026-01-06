@@ -3,10 +3,13 @@
 """
 N-zone Gridworld (Gymnasium Env)
 
-Patched for:
-- active exploration (anti-stall)
-- UI-friendly RGB rendering
-- Phase-1 compatible intrinsic pressures only
+Patched for Phase 2:
+- No intrinsic reward shaping (reward is always 0.0)
+- Zone-wise ecology via:
+  1) slip (action failure)
+  2) drift (wind)
+  3) volatility (time-varying parameters in a volatile zone)
+  4) hazard (teleport / sensor_blackout / reset) without reward penalties
 
 Zones:
   3 vertical zones (0 / 1 / 2)
@@ -41,19 +44,43 @@ class NZoneConfig:
     obs_dim: int = 8
     max_steps: int = 240
 
-    # observation mean separation scale
+    # observation mean separation scale (Phase 1 default)
     zone_mu_scale: float = 2.5
 
-    # per-zone observation noise (hazard noisier)
+    # per-zone observation noise
     zone_sigma: Tuple[float, float, float] = (0.25, 0.40, 0.70)
 
     # include normalized (x,y) in obs tail
     include_xy: bool = False
 
-    # ---- intrinsic pressures (NEW) ----
-    step_penalty: float = 0.01      # time cost (always)
-    stall_penalty: float = 0.05     # extra cost if no movement
-    novel_bonus: float = 0.05       # bonus for visiting a new cell
+    ## ---- Phase 2 (environmental tweak) toggles ----
+    use_slip: bool = False
+    use_drift: bool = False
+    use_volatility: bool = False
+    use_hazard: bool = False
+
+    # 1. Slip (action failure due to low controllability)
+    p_slip: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    slip_mode: str = "random_action"  # "stay" / "random_action" / "reverse"
+
+    # 2. Drift (external "wind" that pushes agent)
+    p_drift: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    drift_vec: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]] = ((0, 0), (0, 0), (0, 0))
+
+    # 3. Volatility/Nonstability: slip/drift parameters can change over time
+    volatile_zone: int = 0
+    volatile_period: int = 40
+    volatile_strength: float = 0.0  # something like additional slip probability / drift randomness
+
+    # 4. Hazard: ext. penalty-less version
+    hazard_mode: str = "teleport"  # "teleport" / "sensor_blackout" / "reset"
+    p_hazard: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    hazard_teleport_to: Tuple[int, int] = (0, 0)
+    hazard_blackout_steps: int = 6  # only used for sensor_blackout
+
+    # Observation regime control (for Phase 2 ... mu scale too large for g to detect env tweaks)
+    phase2_obs_mu_scale: float = 0.5
+    phase2_obs_equal_sigma: bool = True
 
 
 # -------------------------
@@ -61,13 +88,19 @@ class NZoneConfig:
 # -------------------------
 class NZoneGridEnv(gym.Env):
     """
-    Phase-1 gridworld:
+    Gridworld:
     - no extrinsic task reward
-    - intrinsic time / novelty pressures only
-    - designed to prevent trivial 'stall' solutions
+    - Phase 2 adds ecology via transition/observation perturbations
+    - reward is always 0.0 (to avoid reward shaping)
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 8}
+
+    ACTION_UP = 0
+    ACTION_DOWN = 1
+    ACTION_LEFT = 2
+    ACTION_RIGHT = 3
+    ACTION_STAY = 4
 
     def __init__(self, config: Optional[NZoneConfig] = None, render_mode: Optional[str] = None):
         super().__init__()
@@ -88,16 +121,24 @@ class NZoneGridEnv(gym.Env):
 
         self._rng = np.random.default_rng(0)
 
-        # zone prototype means
+        # zone prototype means / noise
         self._zone_mu = np.zeros((3, self.base_obs_dim), dtype=np.float32)
         self._zone_sigma = np.array(self.cfg.zone_sigma, dtype=np.float32)
+
+        # runtime copies (so volatility can modify without mutating cfg)
+        self._p_slip_rt = np.array(self.cfg.p_slip, dtype=np.float32)
+        self._p_drift_rt = np.array(self.cfg.p_drift, dtype=np.float32)
+        self._drift_vec_rt = [tuple(v) for v in self.cfg.drift_vec]  # list of (dx,dy)
+
+        # hazard state
+        self._blackout_timer = 0
 
         # state
         self.x = 0
         self.y = 0
         self.t = 0
 
-        # visited cells (NEW)
+        # visited cells (legacy; not used for reward shaping anymore)
         self.visited = set()
 
         self._init_zone_prototypes(seed=0)
@@ -105,11 +146,24 @@ class NZoneGridEnv(gym.Env):
     # -----------------
     # Helpers
     # -----------------
+    def _phase2_active(self) -> bool:
+        return bool(self.cfg.use_slip or self.cfg.use_drift or self.cfg.use_volatility or self.cfg.use_hazard)
+
     def _init_zone_prototypes(self, seed: int) -> None:
         rng = np.random.default_rng(seed)
+
         base = rng.normal(0, 1, size=(3, self.base_obs_dim)).astype(np.float32)
         base = base / (np.linalg.norm(base, axis=1, keepdims=True) + 1e-9)
-        self._zone_mu = base * float(self.cfg.zone_mu_scale)
+
+        mu_scale = float(self.cfg.phase2_obs_mu_scale) if self._phase2_active() else float(self.cfg.zone_mu_scale)
+        self._zone_mu = base * mu_scale
+
+        # sigma equalization (optional) to avoid g becoming a sensory-cluster label
+        if self._phase2_active() and self.cfg.phase2_obs_equal_sigma:
+            s = float(np.mean(np.array(self.cfg.zone_sigma, dtype=np.float32)))
+            self._zone_sigma = np.array([s, s, s], dtype=np.float32)
+        else:
+            self._zone_sigma = np.array(self.cfg.zone_sigma, dtype=np.float32)
 
     def zone_id(self) -> int:
         if self.x < self.W / 3:
@@ -119,10 +173,30 @@ class NZoneGridEnv(gym.Env):
         else:
             return 2
 
+    def _clip_xy(self, x: int, y: int) -> Tuple[int, int]:
+        x = int(np.clip(x, 0, self.W - 1))
+        y = int(np.clip(y, 0, self.H - 1))
+        return x, y
+
+    def _reverse_action(self, action: int) -> int:
+        if action == self.ACTION_UP:
+            return self.ACTION_DOWN
+        if action == self.ACTION_DOWN:
+            return self.ACTION_UP
+        if action == self.ACTION_LEFT:
+            return self.ACTION_RIGHT
+        if action == self.ACTION_RIGHT:
+            return self.ACTION_LEFT
+        return self.ACTION_STAY
+
     def _observe(self) -> np.ndarray:
         zid = self.zone_id()
         mu = self._zone_mu[zid]
         sigma = float(self._zone_sigma[zid])
+
+        # hazard: sensor blackout -> temporarily huge observation noise
+        if self._blackout_timer > 0:
+            sigma = max(sigma, 3.0)
 
         obs = mu + self._rng.normal(0, sigma, size=(self.base_obs_dim,)).astype(np.float32)
 
@@ -134,6 +208,103 @@ class NZoneGridEnv(gym.Env):
             obs = np.concatenate([obs, obs_xy], axis=0)
 
         return obs.astype(np.float32)
+
+    # -----------------
+    # Ecology hooks (Phase 2)
+    # -----------------
+    def _apply_slip(self, action: int, zid: int) -> Tuple[int, bool]:
+        """1) Slip: with probability p_slip[zid], action is corrupted."""
+        if not self.cfg.use_slip:
+            return action, False
+
+        p = float(np.clip(self._p_slip_rt[zid], 0.0, 1.0))
+        if self._rng.random() >= p:
+            return action, False
+
+        # slipped
+        mode = str(self.cfg.slip_mode).lower().strip()
+        if mode == "stay":
+            return self.ACTION_STAY, True
+        if mode == "reverse":
+            return self._reverse_action(action), True
+
+        # default: random_action (including stay)
+        return int(self._rng.integers(0, 5)), True
+
+    def _apply_drift(self, x: int, y: int, zid: int) -> Tuple[int, int, bool]:
+        """2) Drift: with probability p_drift[zid], apply drift vector after movement."""
+        if not self.cfg.use_drift:
+            return x, y, False
+
+        p = float(np.clip(self._p_drift_rt[zid], 0.0, 1.0))
+        if self._rng.random() >= p:
+            return x, y, False
+
+        dx, dy = self._drift_vec_rt[zid]
+        x2, y2 = self._clip_xy(x + int(dx), y + int(dy))
+        return x2, y2, True
+
+    def _update_volatility(self, zid: int) -> bool:
+        """
+        3) Volatility:
+        In volatile_zone, every volatile_period steps, randomly perturbs slip/drift parameters
+        (stationarity-breaking without using reward penalties).
+        """
+        if not self.cfg.use_volatility:
+            return False
+        if zid != int(self.cfg.volatile_zone):
+            return False
+        if self.cfg.volatile_period <= 0:
+            return False
+        if (self.t % int(self.cfg.volatile_period)) != 0:
+            return False
+
+        strength = float(max(0.0, self.cfg.volatile_strength))
+
+        # (a) slip: add random delta in [-strength, +strength]
+        if self.cfg.use_slip and strength > 0.0:
+            delta = (self._rng.random() * 2.0 - 1.0) * strength
+            self._p_slip_rt[zid] = float(np.clip(self._p_slip_rt[zid] + delta, 0.0, 1.0))
+
+        # (b) drift: randomly rotate/flip drift direction with probability ~ strength
+        if self.cfg.use_drift and strength > 0.0:
+            if self._rng.random() < min(1.0, strength):
+                dx, dy = self._drift_vec_rt[zid]
+                # rotate 90deg: (dx,dy)->(-dy,dx), then maybe flip sign
+                ndx, ndy = -int(dy), int(dx)
+                if self._rng.random() < 0.5:
+                    ndx, ndy = -ndx, -ndy
+                self._drift_vec_rt[zid] = (ndx, ndy)
+
+        return True
+
+    def _apply_hazard(self, x: int, y: int, zid: int) -> Tuple[int, int, bool]:
+        """4) Hazard: teleport / sensor_blackout / reset (no reward penalties)."""
+        if not self.cfg.use_hazard:
+            return x, y, False
+
+        p = float(np.clip(self.cfg.p_hazard[zid], 0.0, 1.0))
+        if self._rng.random() >= p:
+            return x, y, False
+
+        mode = str(self.cfg.hazard_mode).lower().strip()
+        if mode == "teleport":
+            tx, ty = self.cfg.hazard_teleport_to
+            tx, ty = self._clip_xy(int(tx), int(ty))
+            return tx, ty, True
+
+        if mode == "sensor_blackout":
+            self._blackout_timer = int(max(1, self.cfg.hazard_blackout_steps))
+            return x, y, True
+
+        if mode == "reset":
+            # reset-like: move to center, keep time running (no truncation)
+            cx, cy = self.W // 2, self.H // 2
+            cx, cy = self._clip_xy(cx, cy)
+            return cx, cy, True
+
+        # unknown hazard mode -> no-op
+        return x, y, False
 
     # -----------------
     # Gym API
@@ -150,6 +321,12 @@ class NZoneGridEnv(gym.Env):
             self._rng = np.random.default_rng(seed)
             self._init_zone_prototypes(seed=seed)
 
+        # runtime params reset
+        self._p_slip_rt = np.array(self.cfg.p_slip, dtype=np.float32)
+        self._p_drift_rt = np.array(self.cfg.p_drift, dtype=np.float32)
+        self._drift_vec_rt = [tuple(v) for v in self.cfg.drift_vec]
+        self._blackout_timer = 0
+
         self.x = self.W // 2
         self.y = self.H // 2
         self.t = 0
@@ -158,41 +335,70 @@ class NZoneGridEnv(gym.Env):
         self.visited.add((self.x, self.y))
 
         obs = self._observe()
-        info = {"zone_id": self.zone_id(), "x": self.x, "y": self.y, "t": self.t}
+        info = {
+            "zone_id": self.zone_id(),
+            "x": self.x,
+            "y": self.y,
+            "t": self.t,
+            "phase2_active": self._phase2_active(),
+        }
         return obs, info
 
     def step(self, action: int):
-        old_pos = (self.x, self.y)
+        if not isinstance(action, (int, np.integer)):
+            raise ValueError(f"Action must be int, got {type(action)}")
+        action = int(action)
 
-        # Apply action
-        if action == 0:      # up
-            self.y = max(0, self.y - 1)
-        elif action == 1:    # down
-            self.y = min(self.H - 1, self.y + 1)
-        elif action == 2:    # left
-            self.x = max(0, self.x - 1)
-        elif action == 3:    # right
-            self.x = min(self.W - 1, self.x + 1)
-        elif action == 4:    # stay
-            pass
-        else:
+        if action < 0 or action > 4:
             raise ValueError(f"Invalid action: {action}")
 
+        old_pos = (self.x, self.y)
+        zid_before = self.zone_id()
+
+        # Volatility update happens at the start of step (affects parameters used this step)
+        volatility_event = self._update_volatility(zid_before)
+
+        # 1) Slip: possibly corrupt action (based on zone before movement)
+        a_eff, slipped = self._apply_slip(action, zid_before)
+
+        # Apply effective action (deterministic movement)
+        x, y = self.x, self.y
+        if a_eff == self.ACTION_UP:
+            y -= 1
+        elif a_eff == self.ACTION_DOWN:
+            y += 1
+        elif a_eff == self.ACTION_LEFT:
+            x -= 1
+        elif a_eff == self.ACTION_RIGHT:
+            x += 1
+        elif a_eff == self.ACTION_STAY:
+            pass
+
+        x, y = self._clip_xy(x, y)
+
+        # 2) Drift: apply after action move (based on zone before movement for simplicity)
+        x, y, drifted = self._apply_drift(x, y, zid_before)
+
+        # 4) Hazard: event (based on zone after movement tends to feel intuitive; choose after-move zone)
+        self.x, self.y = x, y
+        zid_after_move = self.zone_id()
+        x, y, hazard_event = self._apply_hazard(self.x, self.y, zid_after_move)
+        self.x, self.y = x, y
+
+        # time update
         self.t += 1
+
+        # hazard sensor blackout countdown
+        if self._blackout_timer > 0:
+            self._blackout_timer -= 1
+
         new_pos = (self.x, self.y)
         moved = new_pos != old_pos
 
         obs = self._observe()
 
-        # ---- intrinsic reward shaping (NEW) ----
-        reward = -self.cfg.step_penalty
-
-        if not moved:
-            reward -= self.cfg.stall_penalty
-
-        if moved and new_pos not in self.visited:
-            reward += self.cfg.novel_bonus
-            self.visited.add(new_pos)
+        # No reward shaping in Phase 2: always 0.0
+        reward = 0.0
 
         terminated = False
         truncated = self.t >= self.max_steps
@@ -202,7 +408,24 @@ class NZoneGridEnv(gym.Env):
             "x": self.x,
             "y": self.y,
             "t": self.t,
+
+            # diagnostics
+            "a_in": int(action),
+            "a_eff": int(a_eff),
+            "moved": bool(moved),
+
+            "slip": bool(slipped),
+            "drift": bool(drifted),
+            "hazard": bool(hazard_event),
+            "blackout_timer": int(self._blackout_timer),
+            "volatility_update": bool(volatility_event),
+
+            # expose current runtime params for analysis/debug
+            "p_slip_rt": float(self._p_slip_rt[self.zone_id()]),
+            "p_drift_rt": float(self._p_drift_rt[self.zone_id()]),
+            "drift_vec_rt": tuple(self._drift_vec_rt[self.zone_id()]),
         }
+
         return obs, reward, terminated, truncated, info
 
     # -----------------
@@ -219,7 +442,7 @@ class NZoneGridEnv(gym.Env):
         grid[self.y][self.x] = "A"
         s = "\n".join("".join(row) for row in grid)
         print(s)
-        print(f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y})")
+        print(f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y}) blackout={self._blackout_timer}")
 
     def _render_rgb(self):
         cell = 24
@@ -227,9 +450,9 @@ class NZoneGridEnv(gym.Env):
 
         zone_colors = np.array(
             [
-                [220, 220, 220],  # zone 0
+                [255, 210, 210],  # zone 0
                 [200, 230, 255],  # zone 1
-                [255, 210, 210],  # zone 2
+                [225, 220, 220],  # zone 2
             ],
             dtype=np.uint8,
         )

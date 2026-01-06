@@ -1,4 +1,4 @@
-#%% initial training (NO pygame viewer - quick training) 
+#%% Phase 1 - initial training (NO pygame viewer - quick training) 
 import sys
 from pathlib import Path
 import os
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     ]
     main()
 
-#%% initial training (WITH pygame viewer)
+#%% Phase 1 - initial training (WITH pygame viewer)
 import sys
 from pathlib import Path
 import os
@@ -42,7 +42,145 @@ if __name__ == "__main__":
     ]
     main()
 
-#%% one script for all (root)
+#%% Phase 2 - initial training (WITHOUT pygame viewer)
+## 1. Slip only: zone0 volatile, zone2 stable
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device", "cpu",
+      "--steps", "20000",
+    
+      "--use_slip",
+      "--p_slip", "0.0", "0.0", "0.35",   # z0,z1,z2
+      "--volatile_zone", "0",
+      "--volatile_period", "40",
+      "--volatile_strength", "0.0",        # volatility off
+    ]
+    main()
+    
+#%% Phase 2 - initial training (WITHOUT pygame viewer)
+## 2. Drift only 
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device", "cpu",
+      "--steps", "20000",
+    
+      "--use_drift",
+      "--p_drift", "0.0", "0.0", "0.40",
+      "--drift_vec", "0","0",  "0","0",  "1","0",   # only zone2 wind to +x
+    ]
+    main()
+
+#%% Phase 2 - initial training (WITHOUT pygame viewer)
+## 3. volatility with drift: zone0 volatile, zone2 stable
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device", "cpu",
+      "--steps", "20000",
+    
+      "--use_drift",
+      "--p_drift", "0.0", "0.0", "0.40",
+      "--drift_vec", "0","0",  "0","0",  "1","0",
+    
+      "--use_volatility",
+      "--volatile_zone", "0",
+      "--volatile_period", "40",
+      "--volatile_strength", "0.5",   # flip/rotate probability 
+    ]
+    main()
+
+    
+#%% Phase 2 - initial training (WITHOUT pygame viewer)
+## 4. Hazard only 
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device", "cpu",
+      "--steps", "20000",
+    
+      "--use_hazard",
+      "--hazard_mode", "sensor_blackout",
+      "--p_hazard", "0.0", "0.0", "0.05",
+      "--hazard_blackout_steps", "8",
+    ]
+    main()
+
+
+#%% Phase 2 - initial training (WITH pygame viewer)
+## 2. Slip only: zone0 volatile, zone2 stable
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.training.train import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device", "cpu",
+      "--steps", "20000",
+    
+      "--use_slip",
+      "--p_slip", "0.0", "0.0", "0.35",   # z0,z1,z2
+      "--volatile_zone", "0",
+      "--volatile_period", "40",
+      "--volatile_strength", "0.0",        # volatility off
+      
+    "--view",
+    "--view_every", "2",
+    "--view_fps", "20",
+    "--view_cell_px", "42",
+      
+    ]
+    main()
+
+#%% Analysis: one script for all (root)
 from pathlib import Path
 import os, sys, subprocess, time
 
@@ -76,7 +214,7 @@ def safe_sleep():
 # -----------------------
 # 1) Point to your trained checkpoint
 # -----------------------
-TRAIN_ID = "20260106_120432"   # <-- ckpt run id
+TRAIN_ID = "20260106_140327"   # <-- ckpt run id
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 if not CKPT.exists():
     raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
@@ -103,7 +241,8 @@ run_module("cear_pilot.analysis.figure_attractor", [
     "--lines",
 ])
 print("Figure A done for:", collect_run)
-#%%
+
+
 # -----------------------
 # B) Ablation + Figure B
 # -----------------------
@@ -137,6 +276,7 @@ else:
     print("If your ablation implementation creates separate runs, tell me the folder layout and I'll patch this.")
 
 print("Figure B (if generated) should be under:", ablation_run / "figs")
+
 
 # -----------------------
 # C) Perturbation + Figure C
