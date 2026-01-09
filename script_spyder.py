@@ -61,14 +61,14 @@ if __name__ == "__main__":
     sys.argv = [
       str(Path(__file__).name),
       "--device","cpu",
-      "--steps","80000",
-      "--phase_a_steps","20000",
+      "--steps","40000",
+      
       "--w_entropy","0.001",
-      "--w_actor","0.5",
+      "--w_actor","0.25",
       "--actor_b","0.98",
-      "--freeze_world_in_phase_b", 
-      "--use_slip",
-      "--p_slip","0.35","0.0","0.0",
+      
+      # "--use_slip",
+      # "--p_slip","0.60","0.30","0.0",
 
       # "--view",
       # "--view_every", "2",
@@ -223,7 +223,7 @@ def safe_sleep():
 # -----------------------
 # 1) Point to your trained checkpoint
 # -----------------------
-TRAIN_ID = "20260109_115005"   # <-- ckpt run id
+TRAIN_ID = "20260109_140433"   # <-- ckpt run id
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 if not CKPT.exists():
     raise FileNotFoundError(f"Checkpoint not found: {CKPT}")

@@ -48,7 +48,7 @@ class NZoneConfig:
     zone_mu_scale: float = 0.5  # Phase 1: was 2.5 
 
     # per-zone observation noise
-    zone_sigma: Tuple[float, float, float] = (0.60, 0.30, 0.05)  # z0 volatile
+    zone_sigma: Tuple[float, float, float] = (0.10, 0.10, 0.10)  # z0 volatile
 
     # include normalized (x,y) in obs tail
     include_xy: bool = False
