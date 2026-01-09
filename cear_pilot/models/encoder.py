@@ -11,7 +11,7 @@ import torch.nn as nn
 
 @dataclass
 class EncoderConfig:
-    obs_dim: int = 8
+    obs_dim: int = 5
     proprio_dim: int = 5          # e.g., one-hot last action
     z_dim: int = 16               # extero latent
     p_dim: int = 8                # encoded proprio

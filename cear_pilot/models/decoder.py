@@ -12,7 +12,7 @@ import torch.nn as nn
 class DecoderConfig:
     g_dim: int = 12
     n_actions: int = 5
-    obs_dim: int = 8
+    obs_dim: int = 5
     hidden: int = 64
     dropout: float = 0.0
 

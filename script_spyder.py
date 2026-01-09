@@ -214,7 +214,7 @@ def safe_sleep():
 # -----------------------
 # 1) Point to your trained checkpoint
 # -----------------------
-TRAIN_ID = "20260106_140327"   # <-- ckpt run id
+TRAIN_ID = "20260108_190808"   # <-- ckpt run id
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 if not CKPT.exists():
     raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
