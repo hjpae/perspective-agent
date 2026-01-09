@@ -33,7 +33,10 @@ if __name__ == "__main__":
     sys.argv = [
         str(Path(__file__).name),
         "--device", "cpu",          # or "cuda"
-        "--steps", "80000",
+        "--steps", "20000",
+        
+        "--w_entropy", "0.0", 
+        "--w_actor", "0.5",
 
         "--view",
         "--view_every", "2",
@@ -59,12 +62,23 @@ if __name__ == "__main__":
       str(Path(__file__).name),
       "--device", "cpu",
       "--steps", "20000",
+      "--w_entropy", "0.001", 
+      "--w_actor", "0.5",
     
       "--use_slip",
-      "--p_slip", "0.0", "0.0", "0.35",   # z0,z1,z2
-      "--volatile_zone", "0",
-      "--volatile_period", "40",
-      "--volatile_strength", "0.0",        # volatility off
+      "--p_slip", "0.35", "0.0", "0.0",   # z0,z1,z2
+      # "--volatile_zone", "0",
+      # "--volatile_period", "40",
+      # "--volatile_strength", "0.0",        # volatility off
+
+      "--use_drift",
+      "--p_drift", "0.30", "0.0", "0.0",
+      "--drift_vec", "1","0",  "0","0",  "0","0",   # zone0 wind
+
+      # "--view",
+      # "--view_every", "2",
+      # "--view_fps", "20",
+      # "--view_cell_px", "42",
     ]
     main()
     
@@ -214,7 +228,7 @@ def safe_sleep():
 # -----------------------
 # 1) Point to your trained checkpoint
 # -----------------------
-TRAIN_ID = "20260108_190808"   # <-- ckpt run id
+TRAIN_ID = "20260108_232933"   # <-- ckpt run id
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 if not CKPT.exists():
     raise FileNotFoundError(f"Checkpoint not found: {CKPT}")

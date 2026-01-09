@@ -44,11 +44,11 @@ class NZoneConfig:
     obs_dim: int = 8
     max_steps: int = 240
 
-    # observation mean separation scale (Phase 1 default)
-    zone_mu_scale: float = 2.5
+    # observation mean separation scale (Phase 2 default)
+    zone_mu_scale: float = 0.5  # Phase 1: was 2.5 
 
     # per-zone observation noise
-    zone_sigma: Tuple[float, float, float] = (0.25, 0.40, 0.70)
+    zone_sigma: Tuple[float, float, float] = (0.60, 0.30, 0.05)  # z0 volatile
 
     # include normalized (x,y) in obs tail
     include_xy: bool = False
