@@ -76,7 +76,32 @@ if __name__ == "__main__":
       # "--view_cell_px", "42",
     ]
     main()
-    
+
+#%% testing/zone comparison for demo purpose (g for eval index)
+import sys
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cear_pilot.testing import main
+
+if __name__ == "__main__":
+    sys.argv = [
+      str(Path(__file__).name),
+      "--device","cpu",
+      "--steps","40000",
+      
+      "--ckpt", "outputs/runs/20260109_144355/ckpt.pt",
+      "--seed", "0",
+      "--steps", "240",
+      "--sigmas", "0.60,0.30,0.05", "0.05,0.30,0.60", "0.30,0.30,0.30",
+      
+    ]
+    main()
+
 #%% Phase 2 - initial training (WITHOUT pygame viewer)
 ## 2. Drift only 
 import sys
@@ -188,8 +213,7 @@ if __name__ == "__main__":
       
     ]
     main()
-
-#%% Analysis: one script for all (root)
+#%% Analysis: one script for all (root) | one-on-one sanity check, with B) Ablation 
 from pathlib import Path
 import os, sys, subprocess, time
 
@@ -223,7 +247,7 @@ def safe_sleep():
 # -----------------------
 # 1) Point to your trained checkpoint
 # -----------------------
-TRAIN_ID = "20260109_140433"   # <-- ckpt run id
+TRAIN_ID = "20260109_144355"   # <-- ckpt run id
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 if not CKPT.exists():
     raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
@@ -311,3 +335,174 @@ print("\n ALL DONE.")
 print("Figure A:", collect_run / "figs")
 print("Figure B:", ablation_run / "figs")
 print("Figure C:", perturb_run / "figs")
+#%% Analysis: sigma demo script (root) | ONE trajectory per env + shared PCA + overlay
+from pathlib import Path
+import os, sys, subprocess, time
+
+# -----------------------
+# 0) Make execution robust in Spyder
+# -----------------------
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+print("PROJECT_ROOT:", PROJECT_ROOT)
+print("CWD:", Path.cwd())
+
+RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+def newest_run_dir() -> Path:
+    dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
+    if not dirs:
+        raise FileNotFoundError(f"No run directories found in {RUNS_DIR}")
+    return max(dirs, key=lambda p: p.stat().st_mtime)
+
+def run_module(module: str, args: list[str]):
+    cmd = [sys.executable, "-m", module] + args
+    print("\nRunning:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+def safe_sleep():
+    time.sleep(0.6)
+
+# -----------------------
+# 1) Point to trained checkpoint
+# -----------------------
+TRAIN_ID = "20260109_144355"   # <-- ckpt run id
+CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
+if not CKPT.exists():
+    raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
+
+# -----------------------
+# 2) Sigma conditions (A / flip / flat)
+# -----------------------
+SIGMA_A    = (0.60, 0.30, 0.05)
+SIGMA_FLIP = (0.05, 0.30, 0.60)
+SIGMA_FLAT = (0.30, 0.30, 0.30)
+
+CONDITIONS = [
+    ("A",    SIGMA_A,    False),
+    ("flip", SIGMA_FLIP, True),
+    ("flat", SIGMA_FLAT, True),
+]
+
+# where we save the reference action list
+ACTIONS_REF = PROJECT_ROOT / "outputs" / "tests_sigma_demo" / "actions_ref.json"
+ACTIONS_REF.parent.mkdir(parents=True, exist_ok=True)
+
+# -----------------------
+# 3) Make actions_ref once (baseline greedy rollout)
+# -----------------------
+print("\n=== (0) Build actions_ref from baseline (A sigma) ===")
+run_module("cear_pilot.testing", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--sigmas",
+    f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+    f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",  # dummy second (not used)
+    "--outdir", str(ACTIONS_REF.parent),
+])
+
+if not ACTIONS_REF.exists():
+    raise FileNotFoundError(f"actions_ref not found at: {ACTIONS_REF}")
+print("actions_ref:", ACTIONS_REF)
+safe_sleep()
+
+# -----------------------
+# 4) Collect 30 episodes + shared-PCA embed + per-run attractor plot
+# -----------------------
+collect_runs = {}
+
+for name, sigma, use_replay in CONDITIONS:
+    print(f"\n=== A) Collect ONE episode ({name}) sigma={sigma} replay={use_replay} ===")
+
+    args = [
+        "--ckpt", str(CKPT),
+        "--episodes", "30",
+        "--greedy",
+        "--zone_sigma", str(sigma[0]), str(sigma[1]), str(sigma[2]),
+    ]
+    if use_replay:
+        args += ["--replay_actions", str(ACTIONS_REF)]
+
+    run_module("cear_pilot.experiments.run_collect", args)
+    safe_sleep()
+
+    run_dir = newest_run_dir()
+    collect_runs[name] = run_dir
+    print(f"Detected collect run ({name}):", run_dir)
+
+    print(f"\n=== A) Embed (shared PCA) ({name}) ===")
+    if name == "A":
+        # Fit PCA on baseline A
+        run_module("cear_pilot.analysis.embed_latents", ["--run_dir", str(run_dir)])
+    else:
+        # Reuse PCA from A
+        run_module("cear_pilot.analysis.embed_latents", [
+            "--run_dir", str(run_dir),
+            "--pca_fit_dir", str(collect_runs["A"]),
+        ])
+
+    # Optional: save per-run attractor figure
+    run_module("cear_pilot.analysis.figure_attractor", ["--run_dir", str(run_dir), "--lines"])
+    print(f"Attractor figure done ({name}):", run_dir / "figs")
+
+# -----------------------
+# 5) Overlay the ONE-episode trajectories from 3 envs into ONE figure
+# -----------------------
+print("\n=== B) Overlay ONE-episode PCA(g) trajectories (A vs flip vs flat) ===")
+run_module("cear_pilot.analysis.overlay_one_traj", [
+    "--runs",
+    f"A={collect_runs['A']}",
+    f"flip={collect_runs['flip']}",
+    f"flat={collect_runs['flat']}",
+    "--episode", "29",
+    "--connect",
+])
+print("Overlay figure saved under:", collect_runs["A"] / "figs")
+
+# -----------------------
+# 6) Perturb + recovery per condition (optional: keep as-is)
+# -----------------------
+perturb_runs = {}
+
+for name, sigma, use_replay in CONDITIONS:
+    print(f"\n=== C) Perturb ({name}) sigma={sigma} replay={use_replay} ===")
+    args = [
+        "--ckpt", str(CKPT),
+        "--t_perturb", "80",
+        "--kind", "shock",
+        "--scale", "1.0",
+        "--greedy",
+        "--zone_sigma", str(sigma[0]), str(sigma[1]), str(sigma[2]),
+    ]
+    if use_replay:
+        args += ["--replay_actions", str(ACTIONS_REF)]
+
+    run_module("cear_pilot.experiments.run_perturb", args)
+    safe_sleep()
+
+    run_dir = newest_run_dir()
+    perturb_runs[name] = run_dir
+    print(f"Detected perturb run ({name}):", run_dir)
+
+    print(f"\n=== C) Figure perturb ({name}) ===")
+    run_module("cear_pilot.analysis.figure_perturb", ["--run_dir", str(run_dir)])
+    print(f"Perturb figure done ({name}):", run_dir / "figs")
+
+# -----------------------
+# 7) Summary
+# -----------------------
+print("\n=== ALL DONE ===")
+print("Actions ref:", ACTIONS_REF)
+
+print("\nCollect runs:")
+for k, v in collect_runs.items():
+    print(" ", k, "->", v / "figs")
+
+print("\nPerturb runs:")
+for k, v in perturb_runs.items():
+    print(" ", k, "->", v / "figs")

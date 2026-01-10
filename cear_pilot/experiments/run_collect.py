@@ -59,8 +59,10 @@ def onehot(idx: int, n: int) -> np.ndarray:
     return v
 
 
-def build_agent_from_meta(meta: Dict[str, Any], device: str) -> tuple[CEARAgent, ObsDecoder, NZoneGridEnv]:
+def build_agent_from_meta(meta: Dict[str, Any], device: str, zone_sigma_override=None) -> tuple[CEARAgent, ObsDecoder, NZoneGridEnv]:
     env_cfg = NZoneConfig(**meta["env_cfg"])
+    if zone_sigma_override is not None:
+        env_cfg.zone_sigma = tuple(float(x) for x in zone_sigma_override)
     env = NZoneGridEnv(config=env_cfg)
 
     agent_cfg = AgentConfig(device=device)
@@ -114,12 +116,17 @@ def main():
     ap.add_argument("--greedy", action="store_true", help="Use greedy action selection")
     ap.add_argument("--outdir", type=str, default="", help="Override output dir (default: outputs/runs/<timestamp>)")
     ap.add_argument("--ablate_g", action="store_true", help="Force g=0 (ablation baseline)")
+    ap.add_argument("--zone_sigma", type=float, nargs=3, default=None,
+                help="Override env zone_sigma as three floats: s0 s1 s2")
+    ap.add_argument("--replay_actions", type=str, default="",
+                help="Path to JSON containing action list for action-replay (forces same actions).")
+
     args = ap.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location=args.device)
     meta = ckpt["meta"]
 
-    agent, decoder, env = build_agent_from_meta(meta, device=args.device)
+    agent, decoder, env = build_agent_from_meta(meta, device=args.device, zone_sigma_override=args.zone_sigma)
     agent.load_state_dict(ckpt["agent_state"])
     decoder.load_state_dict(ckpt["decoder_state"])
     agent.to(args.device)
@@ -146,6 +153,20 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     n_actions = int(env.action_space.n)
+    
+    # ---- optional: load action-replay sequence
+    replay_actions = None
+    if str(args.replay_actions).strip():
+        p = Path(args.replay_actions)
+        obj = json.loads(p.read_text())
+        if isinstance(obj, dict) and "actions" in obj:
+            replay_actions = [int(a) for a in obj["actions"]]
+        elif isinstance(obj, list):
+            replay_actions = [int(a) for a in obj]
+        else:
+            raise ValueError("replay_actions JSON must be a list or a dict with key 'actions'")
+        if len(replay_actions) == 0:
+            raise ValueError("replay_actions is empty")
 
     rows: List[Dict[str, Any]] = []
 
@@ -155,14 +176,23 @@ def main():
         last_action = 4  # stay
 
         done = False
+        t = 0  # step counter for replay index
         while not done:
             x_t = torch.tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
             p_t = torch.tensor(onehot(last_action, n_actions), dtype=torch.float32, device=args.device).unsqueeze(0)
+        
+            if replay_actions is None:
+                with torch.no_grad():
+                    action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g)
+                a_int = int(action.item())
+            else:
+                # Action-replay: while g updates with obs, env action stays as replay
+                if t >= len(replay_actions):
+                    break
+                a_int = int(replay_actions[t])
+                with torch.no_grad():
+                    out = agent.forward_step(x_t, p_t, ablate_g=args.ablate_g)
 
-            with torch.no_grad():
-                action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g)
-
-            a_int = int(action.item())
             obs_next, _, terminated, truncated, info2 = env.step(a_int)
 
             # log
@@ -193,6 +223,7 @@ def main():
             obs = obs_next
             last_action = a_int
             done = bool(terminated or truncated)
+            t += 1
 
     saved_path = try_save_table(rows, run_dir / "traj")
     print(f"Saved trajectories to: {saved_path}")
