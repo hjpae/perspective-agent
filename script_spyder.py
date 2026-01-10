@@ -572,7 +572,7 @@ print("Run:", run_dir)
 # # 3) Optional: embed latents (not required for switch figure)
 # run_module("cear_pilot.analysis.embed_latents", ["--run_dir", str(run_dir)])
 
-4) make the switch figure
+# 4) make the switch figure
 run_module("cear_pilot.analysis.figure_switch", [
     "--run_dir", str(run_dir),
     "--episode", "0",
@@ -689,3 +689,144 @@ run_dir = newest_run_dir()
 run_module("cear_pilot.analysis.figure_switch_sweep", ["--run_dir", str(run_dir), "--save_name", "fig_hysteresis.png"])
 print("Saved figs:", run_dir / "figs")
 
+
+#%%
+# run_gate_demo.py
+from pathlib import Path
+import os, sys, subprocess, time
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+def newest_run_dir() -> Path:
+    dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
+    if not dirs:
+        raise RuntimeError(f"No run dirs found under: {RUNS_DIR}")
+    return max(dirs, key=lambda p: p.stat().st_mtime)
+
+def run_module(module: str, args: list[str]):
+    cmd = [sys.executable, "-m", module] + args
+    print("\nRunning:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+def safe_sleep(): time.sleep(0.6)
+
+# -----------------------------
+# Config
+# -----------------------------
+TRAIN_ID = "20260109_144355"
+CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
+
+SIGMA_A    = (0.60, 0.30, 0.05)
+SIGMA_FLIP = (0.05, 0.30, 0.60)
+
+ACTIONS_REF = PROJECT_ROOT / "outputs" / "tests_sigma_demo" / "actions_ref.json"
+ACTIONS_REF.parent.mkdir(parents=True, exist_ok=True)
+
+# Gate figure config
+GATE_EPISODE = 0
+GATE_ALPHA   = 0.05
+GATE_K_ON    = 8
+GATE_K_OFF   = 4
+GATE_POLICY  = "entropy"   # entropy / margin / pi_max ...
+
+# -----------------------------
+# 0) Build one action sequence in baseline A (greedy)
+# -----------------------------
+run_module("cear_pilot.testing", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--sigmas",
+        f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+        f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+    "--outdir", str(ACTIONS_REF.parent),
+])
+assert ACTIONS_REF.exists(), f"Missing: {ACTIONS_REF}"
+safe_sleep()
+
+# -----------------------------
+# 1) Frequency sweep: A<->B toggle with different periods
+# -----------------------------
+periods = [5, 10, 20, 80]   # fast -> slow
+for P in periods:
+    run_module("cear_pilot.experiments.run_switch_sweep", [
+        "--ckpt", str(CKPT),
+        "--device", "cpu",
+        "--seed", "0",
+        "--steps", "240",
+        "--greedy",
+        "--replay_actions", str(ACTIONS_REF),
+        "--zone_sigma",  str(SIGMA_A[0]),   str(SIGMA_A[1]),   str(SIGMA_A[2]),
+        "--zone_sigma2", str(SIGMA_FLIP[0]),str(SIGMA_FLIP[1]),str(SIGMA_FLIP[2]),
+        "--pattern", "toggle",
+        "--t0", "0",
+        "--period", str(P),
+    ])
+    safe_sleep()
+
+    run_dir = newest_run_dir()
+
+    run_module("cear_pilot.analysis.figure_switch_sweep", [
+        "--run_dir", str(run_dir),
+        "--save_name", f"fig_toggle_P{P}.png",
+    ])
+
+    run_module("cear_pilot.analysis.figure_gate", [
+        "--run_dir", str(run_dir),
+        "--episode", str(GATE_EPISODE),
+        "--use_robust_thr",
+        "--ema_alpha", str(GATE_ALPHA),
+        "--k_on", str(GATE_K_ON),
+        "--k_off", str(GATE_K_OFF),
+        "--policy_signal", str(GATE_POLICY),
+        "--outname", f"fig_gate_toggle_P{P}.png",
+        "--title", f"Gate demo (toggle, P={P})",
+    ])
+
+    print("Saved figs:", run_dir / "figs")
+    safe_sleep()
+
+# -----------------------------
+# 2) Hysteresis: A -> B -> A
+# -----------------------------
+run_module("cear_pilot.experiments.run_switch_sweep", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--greedy",
+    "--replay_actions", str(ACTIONS_REF),
+    "--zone_sigma",  str(SIGMA_A[0]),   str(SIGMA_A[1]),   str(SIGMA_A[2]),
+    "--zone_sigma2", str(SIGMA_FLIP[0]),str(SIGMA_FLIP[1]),str(SIGMA_FLIP[2]),
+    "--pattern", "hysteresis",
+    "--t_switch", "80",
+    "--t_back", "160",
+])
+safe_sleep()
+
+run_dir = newest_run_dir()
+
+run_module("cear_pilot.analysis.figure_switch_sweep", [
+    "--run_dir", str(run_dir),
+    "--save_name", "fig_hysteresis.png",
+])
+
+run_module("cear_pilot.analysis.figure_gate", [
+    "--run_dir", str(run_dir),
+    "--episode", str(GATE_EPISODE),
+    "--use_robust_thr",
+    "--ema_alpha", str(GATE_ALPHA),
+    "--k_on", str(GATE_K_ON),
+    "--k_off", str(GATE_K_OFF),
+    "--policy_signal", str(GATE_POLICY),
+    "--outname", "fig_gate_hysteresis.png",
+    "--title", "Gate demo (hysteresis)",
+])
+
+print("Saved figs:", run_dir / "figs")
