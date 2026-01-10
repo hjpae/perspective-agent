@@ -210,6 +210,13 @@ class NZoneGridEnv(gym.Env):
         return obs.astype(np.float32)
 
     # -----------------
+    # Demo helper: runtime sigma switch
+    # -----------------
+    def set_zone_sigma(self, zone_sigma):
+        """Change observation noise online (for regime-switch demos)."""
+        self._zone_sigma = np.array([float(x) for x in zone_sigma], dtype=np.float32)
+
+    # -----------------
     # Ecology hooks (Phase 2)
     # -----------------
     def _apply_slip(self, action: int, zid: int) -> Tuple[int, bool]:

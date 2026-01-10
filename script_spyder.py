@@ -506,3 +506,186 @@ for k, v in collect_runs.items():
 print("\nPerturb runs:")
 for k, v in perturb_runs.items():
     print(" ", k, "->", v / "figs")
+
+#%% Demo: regime-switch (A -> flip) with action replay
+from pathlib import Path
+import os, sys, subprocess, time
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+def newest_run_dir() -> Path:
+    dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
+    return max(dirs, key=lambda p: p.stat().st_mtime)
+
+def run_module(module: str, args: list[str]):
+    cmd = [sys.executable, "-m", module] + args
+    print("\nRunning:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+def safe_sleep(): time.sleep(0.6)
+
+TRAIN_ID = "20260109_144355"
+CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
+
+SIGMA_A    = (0.60, 0.30, 0.05)
+SIGMA_FLIP = (0.05, 0.30, 0.60)
+
+ACTIONS_REF = PROJECT_ROOT / "outputs" / "tests_sigma_demo" / "actions_ref.json"
+ACTIONS_REF.parent.mkdir(parents=True, exist_ok=True)
+
+# 1) Build one action sequence in baseline A (greedy)
+run_module("cear_pilot.testing", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--sigmas", f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+               f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+    "--outdir", str(ACTIONS_REF.parent),
+])
+assert ACTIONS_REF.exists()
+
+safe_sleep()
+
+# 2) Collect ONE episode with action replay, but switch sigma at t_switch
+T_SWITCH = 80
+
+run_module("cear_pilot.experiments.run_collect", [
+    "--ckpt", str(CKPT),
+    "--episodes", "1",
+    "--greedy",
+    "--replay_actions", str(ACTIONS_REF),
+    "--zone_sigma", str(SIGMA_A[0]), str(SIGMA_A[1]), str(SIGMA_A[2]),
+    "--t_switch", str(T_SWITCH),
+    "--zone_sigma2", str(SIGMA_FLIP[0]), str(SIGMA_FLIP[1]), str(SIGMA_FLIP[2]),
+])
+
+safe_sleep()
+run_dir = newest_run_dir()
+print("Run:", run_dir)
+
+# # 3) Optional: embed latents (not required for switch figure)
+# run_module("cear_pilot.analysis.embed_latents", ["--run_dir", str(run_dir)])
+
+4) make the switch figure
+run_module("cear_pilot.analysis.figure_switch", [
+    "--run_dir", str(run_dir),
+    "--episode", "0",
+    "--t_switch", str(T_SWITCH),
+])
+print("Saved:", run_dir / "figs" / "fig_switch.png")
+
+# 5) make the switch-perturb figure
+run_module("cear_pilot.experiments.run_switch_perturb", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--steps", "240",
+    "--greedy",
+    "--replay_actions", str(ACTIONS_REF),
+    "--zone_sigma", str(SIGMA_A[0]), str(SIGMA_A[1]), str(SIGMA_A[2]),
+    "--t_switch", str(T_SWITCH),
+    "--zone_sigma2", str(SIGMA_FLIP[0]), str(SIGMA_FLIP[1]), str(SIGMA_FLIP[2]),
+    "--t_perturb", "120",
+    "--scale", "1.0",
+])
+
+safe_sleep()
+run_dir = newest_run_dir()
+print("Run:", run_dir)
+
+
+run_module("cear_pilot.analysis.figure_switch_perturb", [
+    "--run_dir", str(run_dir),
+    "--shade_after_switch",
+])
+print("Saved:", run_dir / "figs" / "fig_switch.png")
+
+#%% Demo: switch sweep + hysteresis (root)
+from pathlib import Path
+import os, sys, subprocess, time
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+
+RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+def newest_run_dir() -> Path:
+    dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
+    return max(dirs, key=lambda p: p.stat().st_mtime)
+
+def run_module(module: str, args: list[str]):
+    cmd = [sys.executable, "-m", module] + args
+    print("\nRunning:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+def safe_sleep(): time.sleep(0.6)
+
+TRAIN_ID = "20260109_144355"
+CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
+
+SIGMA_A    = (0.60, 0.30, 0.05)
+SIGMA_FLIP = (0.05, 0.30, 0.60)
+
+ACTIONS_REF = PROJECT_ROOT / "outputs" / "tests_sigma_demo" / "actions_ref.json"
+ACTIONS_REF.parent.mkdir(parents=True, exist_ok=True)
+
+# 0) Build one action sequence in baseline A (greedy)
+run_module("cear_pilot.testing", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--sigmas", f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}", f"{SIGMA_A[0]},{SIGMA_A[1]},{SIGMA_A[2]}",
+    "--outdir", str(ACTIONS_REF.parent),
+])
+assert ACTIONS_REF.exists()
+safe_sleep()
+
+# 1) Frequency sweep: A<->B toggle with different periods
+periods = [5, 10, 20, 80]   # fast -> slow
+for P in periods:
+    run_module("cear_pilot.experiments.run_switch_sweep", [
+        "--ckpt", str(CKPT),
+        "--device", "cpu",
+        "--seed", "0",
+        "--steps", "240",
+        "--greedy",
+        "--replay_actions", str(ACTIONS_REF),
+        "--zone_sigma", str(SIGMA_A[0]), str(SIGMA_A[1]), str(SIGMA_A[2]),
+        "--zone_sigma2", str(SIGMA_FLIP[0]), str(SIGMA_FLIP[1]), str(SIGMA_FLIP[2]),
+        "--pattern", "toggle",
+        "--t0", "0",
+        "--period", str(P),
+    ])
+    safe_sleep()
+    run_dir = newest_run_dir()
+    run_module("cear_pilot.analysis.figure_switch_sweep", ["--run_dir", str(run_dir), "--save_name", f"fig_toggle_P{P}.png"])
+    print("Saved figs:", run_dir / "figs")
+    safe_sleep()
+
+# 2) Hysteresis: A -> B -> A
+run_module("cear_pilot.experiments.run_switch_sweep", [
+    "--ckpt", str(CKPT),
+    "--device", "cpu",
+    "--seed", "0",
+    "--steps", "240",
+    "--greedy",
+    "--replay_actions", str(ACTIONS_REF),
+    "--zone_sigma", str(SIGMA_A[0]), str(SIGMA_A[1]), str(SIGMA_A[2]),
+    "--zone_sigma2", str(SIGMA_FLIP[0]), str(SIGMA_FLIP[1]), str(SIGMA_FLIP[2]),
+    "--pattern", "hysteresis",
+    "--t_switch", "80",
+    "--t_back", "160",
+])
+safe_sleep()
+run_dir = newest_run_dir()
+run_module("cear_pilot.analysis.figure_switch_sweep", ["--run_dir", str(run_dir), "--save_name", "fig_hysteresis.png"])
+print("Saved figs:", run_dir / "figs")
+
