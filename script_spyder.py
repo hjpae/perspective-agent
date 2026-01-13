@@ -834,64 +834,51 @@ print("Saved figs:", run_dir / "figs")
 #%%
 # script_switch_sweep_eval_spyder.py
 # -*- coding: utf-8 -*-
-"""
-Spyder-friendly script:
-- Run switch-sweep (T=400, warmup=150) for periods: 10/20/40/80
-- For each run: compute (A) detection delay and (B) hysteresis area via figure_switch_eval.py
-- Saves outputs under: outputs/runs/<timestamp>/
-
-Usage in Spyder:
-- Set TRAIN_ID to your ckpt run folder name
-- Run this file
-"""
 
 from pathlib import Path
 import os, sys, subprocess, time
 
 
 # -----------------------
-# 0) Make execution robust in Spyder
+# 0) Spyder-safe setup
 # -----------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 os.chdir(PROJECT_ROOT)
 sys.path.insert(0, str(PROJECT_ROOT))
 
-print("PROJECT_ROOT:", PROJECT_ROOT)
-print("CWD:", Path.cwd())
-
 RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def newest_run_dir() -> Path:
     dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
     if not dirs:
-        raise FileNotFoundError(f"No run directories found in {RUNS_DIR}")
+        raise FileNotFoundError("No run dirs found")
     return max(dirs, key=lambda p: p.stat().st_mtime)
+
 
 def run_module(module: str, args: list[str]):
     cmd = [sys.executable, "-m", module] + args
     print("\nRunning:", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
+
 def safe_sleep():
-    time.sleep(0.7)  # filesystem timestamp separation
+    time.sleep(0.5)
 
 
 # -----------------------
-# 1) Point to trained checkpoint
+# 1) Checkpoint
 # -----------------------
-TRAIN_ID = "20260109_144355"   # <-- change this
+TRAIN_ID = "20260109_144355"   # <-- change if needed
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
-if not CKPT.exists():
-    raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
-
-print("\nCKPT:", CKPT)
+assert CKPT.exists(), f"Missing ckpt: {CKPT}"
 
 
 # -----------------------
 # 2) Experiment settings
 # -----------------------
-T_TOTAL  = 400
+T_TOTAL = 400
 WARMUP  = 150
 PERIODS = [10, 20, 40, 80]
 
@@ -902,29 +889,21 @@ DEVICE = "cpu"
 SEED   = "0"
 GREEDY = True
 
-# detection params
+# figure params
 PRE_WINDOW = 80
 ALPHA = 0.05
 CONSEC = 3
-
-# hysteresis window length after each switch
 L = 60
-
-# which policy signal to compare against g
-# options: "entropy", "pi_max", "margin"
 POLICY_SIGNAL = "entropy"
 
 
 # -----------------------
-# 3) Loop over periods
+# 3) Run sweep + figures
 # -----------------------
-results = []
-
 for P in PERIODS:
     print("\n" + "=" * 80)
-    print(f"=== Switch-sweep: period={P} (T={T_TOTAL}, warmup={WARMUP}) ===")
+    print(f"=== period = {P} ===")
 
-    # --- (A) Run switch sweep collector
     before = set(p.name for p in RUNS_DIR.iterdir() if p.is_dir())
 
     args_collect = [
@@ -936,26 +915,21 @@ for P in PERIODS:
         "--period", str(P),
         "--sigma_A", str(SIGMA_A[0]), str(SIGMA_A[1]), str(SIGMA_A[2]),
         "--sigma_B", str(SIGMA_B[0]), str(SIGMA_B[1]), str(SIGMA_B[2]),
-        "--max_steps", "400",
+        "--max_steps", str(T_TOTAL),
     ]
     if GREEDY:
         args_collect.append("--greedy")
-
+    
+    # 1) Collect
     run_module("cear_pilot.experiments.run_switch_sweep", args_collect)
     safe_sleep()
-
-    # detect new run dir
+    
+    # 2) Detect run_dir
     after = [p for p in RUNS_DIR.iterdir() if p.is_dir() and p.name not in before]
-    if len(after) == 0:
-        # fallback
-        run_dir = newest_run_dir()
-    else:
-        run_dir = max(after, key=lambda p: p.stat().st_mtime)
-
-    print("Detected run_dir:", run_dir)
-
-    # --- (B) Run evaluation + figure
-    args_eval = [
+    run_dir = max(after, key=lambda p: p.stat().st_mtime) if after else newest_run_dir()
+    
+    # 3) Make figure
+    run_module("cear_pilot.analysis.figure_switch_eval", [
         "--run_dir", str(run_dir),
         "--warmup", str(WARMUP),
         "--pre_window", str(PRE_WINDOW),
@@ -963,15 +937,24 @@ for P in PERIODS:
         "--consec", str(CONSEC),
         "--L", str(L),
         "--policy_signal", POLICY_SIGNAL,
+    ])
+    
+    # 4) Console lag table (summary)
+    # -----------------------
+    print("\n" + "=" * 80)
+    print("FINAL LAG SUMMARY TABLE")
+    
+    args_table = [
+        "--root_dir", str(RUNS_DIR),
+        "--periods", *[str(p) for p in PERIODS],
+        "--warmup", str(WARMUP),
+        "--L", str(L),
+        "--signed_g",
     ]
-    run_module("cear_pilot.analysis.figure_switch_eval", args_eval)
+    run_module("cear_pilot.analysis.print_switch_lag_table", args_table)
 
-    print(f"[DONE] period={P} -> {run_dir / 'switch_eval.json'}")
-    results.append((P, run_dir))
+    print(f"[OK] figure saved:")
+    print(run_dir / "figs" / f"fig_switch_eval_{POLICY_SIGNAL}.png")
 
-print("\n" + "=" * 80)
-print("ALL DONE. Summary:")
-for P, run_dir in results:
-    print(f"  period={P}: {run_dir}")
-    print(f"    fig:  {run_dir / 'figs' / f'fig_switch_eval_{POLICY_SIGNAL}.png'}")
-    print(f"    json: {run_dir / 'switch_eval.json'}")
+
+print("\nALL DONE.")

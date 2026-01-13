@@ -164,3 +164,86 @@ def hysteresis_area(
     if m_up is not None and m_dn is not None:
         out["area"] = float(np.mean(np.abs(m_up - m_dn)))
     return out
+
+def transition_lag_half_rise(
+    score: np.ndarray,
+    regime: np.ndarray,
+    switches: np.ndarray,
+    L: int,
+    eps: float = 1e-8,
+) -> Dict[str, Any]:
+    """
+    Compute transition lag (half-rise time) separately for A->B and B->A switches.
+
+    For each switch time t0:
+      - pre baseline: mean(score[t0-L : t0])   (clipped to valid range)
+      - post target:  mean(score[t0 : t0+L])   (clipped)
+      - half level: baseline + 0.5*(target-baseline)
+      - lag: smallest tau>=0 such that score[t0+tau] crosses the half level in the correct direction.
+
+    Returns:
+      {
+        "lag_up": {"n":..., "mean":..., "median":...} or None,
+        "lag_dn": {"n":..., "mean":..., "median":...} or None,
+        "raw_up": [...],
+        "raw_dn": [...],
+      }
+    """
+    T = len(score)
+    idx = np.where(switches.astype(int) == 1)[0].tolist()
+
+    raw_up: List[int] = []
+    raw_dn: List[int] = []
+
+    for t0 in idx:
+        if t0 <= 1 or t0 >= T - 2:
+            continue
+
+        r0 = int(regime[t0 - 1]) if t0 - 1 >= 0 else int(regime[t0])
+        r1 = int(regime[t0])
+
+        a0 = max(0, t0 - L)
+        a1 = t0
+        b0 = t0
+        b1 = min(T, t0 + L)
+
+        if (a1 - a0) < max(3, L // 4) or (b1 - b0) < max(3, L // 4):
+            continue
+
+        baseline = float(np.mean(score[a0:a1]))
+        target = float(np.mean(score[b0:b1]))
+        delta = target - baseline
+        if abs(delta) < eps:
+            continue
+
+        half = baseline + 0.5 * delta
+
+        # Find first crossing in the correct direction
+        seg = score[b0:b1]
+        lag = None
+        if delta > 0:
+            # rising: first time >= half
+            hits = np.where(seg >= half)[0]
+        else:
+            # falling: first time <= half
+            hits = np.where(seg <= half)[0]
+
+        if hits.size > 0:
+            lag = int(hits[0])
+            if r0 == 0 and r1 == 1:
+                raw_up.append(lag)
+            elif r0 == 1 and r1 == 0:
+                raw_dn.append(lag)
+
+    def summarize(xs: List[int]) -> Optional[Dict[str, float]]:
+        if len(xs) == 0:
+            return None
+        return {"n": int(len(xs)), "mean": float(np.mean(xs)), "median": float(np.median(xs))}
+
+    return {
+        "lag_up": summarize(raw_up),
+        "lag_dn": summarize(raw_dn),
+        "raw_up": raw_up,
+        "raw_dn": raw_dn,
+        "L": int(L),
+    }

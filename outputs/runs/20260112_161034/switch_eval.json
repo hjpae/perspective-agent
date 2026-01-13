@@ -1,0 +1,63 @@
+{
+  "delay_g": {
+    "n": 20,
+    "mean": 69.35,
+    "median": 72.0
+  },
+  "delay_pi": {
+    "n": 5,
+    "mean": 35.4,
+    "median": 38.0
+  },
+  "hysteresis_g": {
+    "area": 0.01166434958577156,
+    "n_up": 12,
+    "n_dn": 12
+  },
+  "hysteresis_pi": {
+    "area": 1.0354537963867188,
+    "n_up": 12,
+    "n_dn": 12
+  },
+  "lag_g": {
+    "up": {
+      "n": 12,
+      "mean": 1.1666666666666667,
+      "median": 1.0
+    },
+    "dn": {
+      "n": 12,
+      "mean": 0.75,
+      "median": 0.0
+    },
+    "L": 9
+  },
+  "lag_pi": {
+    "up": {
+      "n": 12,
+      "mean": 1.1666666666666667,
+      "median": 1.0
+    },
+    "dn": {
+      "n": 12,
+      "mean": 0.6666666666666666,
+      "median": 1.0
+    },
+    "L": 9
+  },
+  "policy_signal": "entropy",
+  "params": {
+    "run_dir": "/home/hjpae/cear_demo/outputs/runs/20260112_161034",
+    "warmup": 150,
+    "pre_window": 80,
+    "alpha": 0.05,
+    "consec": 3,
+    "L": 9,
+    "policy_signal": "entropy"
+  },
+  "meta": {
+    "period": 10,
+    "warmup": 150,
+    "T": 400
+  }
+}

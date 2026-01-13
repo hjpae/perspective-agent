@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List
 import numpy as np
 import matplotlib.pyplot as plt
 
-from cear_pilot.analysis.metrics import detect_delay_quantile, hysteresis_area
+from cear_pilot.analysis.metrics import detect_delay_quantile, hysteresis_area, transition_lag_half_rise
 
 
 def load_table(traj_path: Path):
@@ -29,17 +29,46 @@ def find_traj(run_dir: Path) -> Path:
     raise FileNotFoundError(f"No traj.parquet/csv in {run_dir}")
 
 
-def g_score_from_df(df, warmup: int) -> np.ndarray:
-    g_cols = [c for c in df.columns if c.startswith("g_")]
-    if len(g_cols) == 0:
-        raise ValueError("No g_* columns found in traj.")
-    G = df[g_cols].to_numpy(dtype=np.float32)
+# def g_score_from_df(df, warmup: int) -> np.ndarray:
+#     g_cols = [c for c in df.columns if c.startswith("g_")]
+#     if len(g_cols) == 0:
+#         raise ValueError("No g_* columns found in traj.")
+#     G = df[g_cols].to_numpy(dtype=np.float32)
 
-    # Use warmup mean as baseline (pre-mean)
-    w = max(10, int(warmup))
-    w = min(w, G.shape[0])
-    mu = G[:w].mean(axis=0)
-    return np.linalg.norm(G - mu[None, :], axis=-1).astype(np.float32)
+#     # Use warmup mean as baseline (pre-mean)
+#     w = max(10, int(warmup))
+#     w = min(w, G.shape[0])
+#     mu = G[:w].mean(axis=0)
+#     return np.linalg.norm(G - mu[None, :], axis=-1).astype(np.float32)
+
+
+def g_signed_score_from_df(df, warmup: int, regime: np.ndarray, buffer: int = 2) -> np.ndarray:
+    g_cols = [c for c in df.columns if c.startswith("g_")]
+    G = df[g_cols].to_numpy(dtype=np.float32)
+    T = G.shape[0]
+
+    # Use only post-warmup points, and exclude a small buffer around switches if desired
+    idx = np.arange(T)
+    post = idx >= int(warmup)
+
+    # Regime masks in post-warmup
+    A = post & (regime == 0)
+    B = post & (regime == 1)
+
+    # Fallback if one side is empty
+    if A.sum() < 10 or B.sum() < 10:
+        mu = G[:max(10, min(int(warmup), T))].mean(axis=0)
+        return (G - mu[None, :]).sum(axis=-1).astype(np.float32)
+
+    muA = G[A].mean(axis=0)
+    muB = G[B].mean(axis=0)
+
+    w = (muB - muA).astype(np.float32)
+    w = w / (np.linalg.norm(w) + 1e-8)
+
+    # Signed projection (centered at muA)
+    s = (G - muA[None, :]) @ w
+    return s.astype(np.float32)
 
 
 def _segment_boundaries(t: np.ndarray, switch_times_idx: np.ndarray, warmup_t: int) -> List[int]:
@@ -112,9 +141,13 @@ def main():
         T = int(meta.get("T", -1))
     else:
         P, W, T = -1, int(args.warmup), -1
+    
+    # After reading P from meta
+    if P > 0:
+        args.L = min(int(args.L), max(2, P - 1))
 
     # --- scores
-    s_g = g_score_from_df(df, warmup=args.warmup)
+    s_g = g_signed_score_from_df(df, warmup=args.warmup, regime=regime)
 
     if args.policy_signal not in df.columns:
         raise KeyError(f"Missing policy signal column: {args.policy_signal}")
@@ -156,6 +189,10 @@ def main():
     # --- B) hysteresis area
     hyst_g = hysteresis_area(s_g, regime, switches, L=args.L)
     hyst_pi = hysteresis_area(s_pi, regime, switches, L=args.L)
+    
+    # --- B2) transition lag (half-rise time)
+    lag_g = transition_lag_half_rise(s_g, regime, switches, L=args.L)
+    lag_pi = transition_lag_half_rise(s_pi, regime, switches, L=args.L)
 
     # --- summary
     def summarize(x: List[int]) -> Optional[Dict[str, float]]:
@@ -166,8 +203,10 @@ def main():
     out: Dict[str, Any] = {
         "delay_g": summarize(delays_g),
         "delay_pi": summarize(delays_pi),
-        "hysteresis_g": {"area": hyst_g["area"], "n_up": hyst_g["n_up"], "n_dn": hyst_g["n_dn"]},
-        "hysteresis_pi": {"area": hyst_pi["area"], "n_up": hyst_pi["n_up"], "n_dn": hyst_pi["n_dn"]},
+        # "hysteresis_g": {"area": hyst_g["area"], "n_up": hyst_g["n_up"], "n_dn": hyst_g["n_dn"]},
+        # "hysteresis_pi": {"area": hyst_pi["area"], "n_up": hyst_pi["n_up"], "n_dn": hyst_pi["n_dn"]},
+        "lag_g": {"up": lag_g["lag_up"], "dn": lag_g["lag_dn"], "L": lag_g["L"]},
+        "lag_pi": {"up": lag_pi["lag_up"], "dn": lag_pi["lag_dn"], "L": lag_pi["L"]},
         "policy_signal": args.policy_signal,
         "params": vars(args),
         "meta": {"period": P, "warmup": W, "T": T},
@@ -191,17 +230,15 @@ def main():
     for sw in switch_times:
         ax1.axvline(int(t[sw]), linewidth=0.7, alpha=0.35)
 
-    # Period label (single, non-clutter)
-    ax1.text(
-        0.01,
-        0.98,
-        f"switch every P={P} steps (after warmup)",
-        transform=ax1.transAxes,
-        ha="left",
-        va="top",
-        fontsize=10,
-        alpha=0.9,
-    )
+    # # Period label
+    # ax1.text(
+    #     0.01, 0.90,
+    #     f"lag_g(up/dn)={lag_g['lag_up']} / {lag_g['lag_dn']}\n"
+    #     f"lag_pi(up/dn)={lag_pi['lag_up']} / {lag_pi['lag_dn']}",
+    #     transform=ax1.transAxes,
+    #     ha="left", va="top", fontsize=9, alpha=0.9
+    # )
+
     ax1.set_title(f"Scores + regime shading | P={P}  warmup={W}  T={T}  (policy={args.policy_signal})")
     ax1.set_xlabel("t")
     ax1.legend()
@@ -212,7 +249,7 @@ def main():
         ax2.plot(hyst_g["m_up"], label="A->B")
     if hyst_g["m_dn"] is not None:
         ax2.plot(hyst_g["m_dn"], label="B->A")
-    ax2.set_title(f"g hysteresis (area={hyst_g['area']})")
+    ax2.set_title(f"g hysteresis")
     ax2.set_xlabel("tau")
     ax2.legend()
 
@@ -222,7 +259,7 @@ def main():
         ax3.plot(hyst_pi["m_up"], label="A->B")
     if hyst_pi["m_dn"] is not None:
         ax3.plot(hyst_pi["m_dn"], label="B->A")
-    ax3.set_title(f"{args.policy_signal} hysteresis (area={hyst_pi['area']})")
+    ax3.set_title(f"{args.policy_signal} hysteresis")
     ax3.set_xlabel("tau")
     ax3.legend()
 
