@@ -958,3 +958,158 @@ for P in PERIODS:
 
 
 print("\nALL DONE.")
+
+#%% 
+# -----------------------
+# PYGAME ROLLOUT (Spyder)
+# -----------------------
+from pathlib import Path
+import os, sys
+import numpy as np
+import torch
+
+from cear_pilot.envs.nzone_grid import NZoneConfig, NZoneGridEnv
+from cear_pilot.models.agent import CEARAgent, AgentConfig
+from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
+from cear_pilot.training.pygame_viewer import PygameGridViewer
+
+
+def _onehot(idx: int, n: int) -> np.ndarray:
+    v = np.zeros((n,), dtype=np.float32)
+    v[int(idx)] = 1.0
+    return v
+
+
+def _build_from_ckpt(ckpt_path: Path, device: str = "cpu", max_steps: int = 400):
+    ckpt = torch.load(ckpt_path, map_location=device)
+    meta = ckpt["meta"]
+
+    # Env
+    env_cfg = NZoneConfig(**meta["env_cfg"])
+    env_cfg.max_steps = int(max_steps)
+    env = NZoneGridEnv(config=env_cfg)
+
+    # Agent
+    agent_cfg = AgentConfig(device=device)
+    agent_cfg.encoder.__dict__.update(meta["agent_cfg"]["encoder"])
+    agent_cfg.world.__dict__.update(meta["agent_cfg"]["world"])
+    agent_cfg.state.__dict__.update(meta["agent_cfg"]["state"])
+    agent_cfg.policy.__dict__.update(meta["agent_cfg"]["policy"])
+    agent = CEARAgent(agent_cfg)
+
+    # Decoder (not required for viewing, but ckpt has it)
+    dec_cfg = DecoderConfig(**meta["decoder_cfg"])
+    decoder = ObsDecoder(dec_cfg)
+
+    agent.load_state_dict(ckpt["agent_state"])
+    decoder.load_state_dict(ckpt["decoder_state"])
+
+    agent.to(device).eval()
+    decoder.to(device).eval()
+    return agent, decoder, env
+
+
+def _entropy_from_logits(logits: np.ndarray) -> float:
+    ex = np.exp(logits - np.max(logits))
+    p = ex / (np.sum(ex) + 1e-12)
+    return float(-np.sum(p * np.log(p + 1e-12)))
+
+
+def run_pygame_rollout(
+    ckpt_path: str,
+    T: int = 400,
+    greedy: bool = True,
+    device: str = "cpu",
+    seed: int = 0,
+    fps: int = 12,
+    cell_px: int = 40,
+    sigma: tuple[float, float, float] | None = None,
+    n_episodes: int = 10,          # <-- add
+    episode_sleep_sec: float = 0.4 # <-- add (optional)
+):
+    ckpt_path = Path(ckpt_path)
+    assert ckpt_path.exists(), f"Missing ckpt: {ckpt_path}"
+
+    rng = np.random.default_rng(seed)
+    agent, decoder, env = _build_from_ckpt(ckpt_path, device=device, max_steps=T)
+
+    if sigma is not None:
+        env._zone_sigma = np.array(list(sigma), dtype=np.float32)
+
+    viewer = PygameGridViewer(
+        width=env.cfg.width,
+        height=env.cfg.height,
+        cell_px=cell_px,
+        fps=fps,
+        title=f"Testing runs | {ckpt_path.parent.name}",
+    )
+
+    try:
+        for ep in range(int(n_episodes)):
+            # New episode seed each time
+            ep_seed = int(rng.integers(0, 1_000_000))
+            obs, info = env.reset(seed=ep_seed)
+            agent.reset(batch_size=1)
+            last_action = 4
+
+            for t_global in range(int(T)):
+                x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+                p_t = torch.tensor(_onehot(last_action, env.action_space.n), dtype=torch.float32, device=device).unsqueeze(0)
+
+                with torch.no_grad():
+                    action, out = agent.step(x_t, p_t, greedy=bool(greedy), ablate_g=False)
+
+                a_int = int(action.item())
+                logits = out["logits"].squeeze(0).detach().cpu().numpy()
+                g_vec = out["g"].squeeze(0).detach().cpu().numpy()
+
+                obs, _, terminated, truncated, info2 = env.step(a_int)
+
+                ent = _entropy_from_logits(logits)
+                g_norm = float(np.linalg.norm(g_vec))
+
+                ok = viewer.draw(
+                    env=env,
+                    step=t_global,
+                    episode=ep,           # <-- this will show episode count in HUD (viewer already supports it)
+                    last_action=a_int,
+                    loss=0.0,
+                    loss_pred=0.0,
+                    loss_smooth=0.0,
+                    entropy=ent,
+                    g_norm=g_norm,
+                )
+                if ok is False:
+                    return
+
+                last_action = a_int
+                if terminated or truncated:
+                    break
+
+            # tiny pause between episodes (optional)
+            if episode_sleep_sec > 0:
+                import time
+                time.sleep(float(episode_sleep_sec))
+
+    finally:
+        viewer.close()
+
+
+# -----------------------
+# CALL IT (edit this)
+# -----------------------
+CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260109_144355" / "ckpt.pt").resolve())
+
+run_pygame_rollout(
+    ckpt_path=CKPT,
+    T=60,
+    greedy=False,
+    device="cpu",
+    n_episodes=10,
+    seed=2,
+    fps=24,
+    cell_px=40,
+    #sigma=(0.60, 0.30, 0.05),  # optional: force regime A
+    #sigma=(0.05, 0.30, 0.60),  # optional: force regime B
+)
+
