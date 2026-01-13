@@ -10,7 +10,7 @@ Metrics for "order parameter" behavior:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List, Any
 
 import numpy as np
 
@@ -83,3 +83,84 @@ def silhouette_by_zone(emb: np.ndarray, zone: np.ndarray) -> Optional[float]:
         return float(silhouette_score(emb, zone))
     except Exception:
         return None
+
+
+def detect_delay_quantile(
+    score: np.ndarray,
+    switch_t: int,
+    pre_window: int = 80,
+    alpha: float = 0.05,
+    consec: int = 3,
+) -> Optional[int]:
+    """
+    Change-point detection delay.
+    threshold = (1-alpha) quantile of pre-window score.
+    delay = first t>=switch_t where score[t:t+consec] all exceed threshold.
+
+    Returns delay steps, or None if not detected.
+    """
+    T = len(score)
+    a = max(0, switch_t - pre_window)
+    b = max(0, switch_t)
+    if b - a < 10:
+        return None
+
+    thr = float(np.quantile(score[a:b], 1.0 - alpha))
+    for t in range(switch_t, T - consec + 1):
+        if np.all(score[t:t+consec] > thr):
+            return int(t - switch_t)
+    return None
+
+
+def hysteresis_area(
+    score: np.ndarray,
+    regime: np.ndarray,
+    switches: np.ndarray,
+    L: int = 60,
+) -> Dict[str, Any]:
+    """
+    Compute hysteresis (A->B vs B->A) after warmup using local windows.
+
+    - regime[t] in {0,1}
+    - switches[t]=1 at the switch time (same length as score)
+    - For each switch time t0, take window [t0, t0+L)
+      and collect score segments separately for A->B and B->A.
+    - Mean trajectories m_up, m_dn; area = mean(|m_up - m_dn|)
+
+    Returns dict with area and mean curves.
+    """
+    T = len(score)
+    idx = np.where(switches.astype(int) == 1)[0].tolist()
+    seg_up = []  # 0->1
+    seg_dn = []  # 1->0
+
+    for t0 in idx:
+        if t0 + L > T:
+            continue
+        r0 = int(regime[t0-1]) if t0 - 1 >= 0 else int(regime[t0])
+        r1 = int(regime[t0])
+        seg = score[t0:t0+L].astype(np.float32)
+
+        if r0 == 0 and r1 == 1:
+            seg_up.append(seg)
+        elif r0 == 1 and r1 == 0:
+            seg_dn.append(seg)
+
+    def mean_or_none(segs: List[np.ndarray]) -> Optional[np.ndarray]:
+        if len(segs) == 0:
+            return None
+        return np.stack(segs, axis=0).mean(axis=0)
+
+    m_up = mean_or_none(seg_up)
+    m_dn = mean_or_none(seg_dn)
+
+    out: Dict[str, Any] = {
+        "n_up": len(seg_up),
+        "n_dn": len(seg_dn),
+        "m_up": m_up,
+        "m_dn": m_dn,
+        "area": None,
+    }
+    if m_up is not None and m_dn is not None:
+        out["area"] = float(np.mean(np.abs(m_up - m_dn)))
+    return out

@@ -1,0 +1,37 @@
+{
+  "delay_g": {
+    "n": 1,
+    "mean": 16.0,
+    "median": 16.0
+  },
+  "delay_pi": {
+    "n": 2,
+    "mean": 1.5,
+    "median": 1.5
+  },
+  "hysteresis_g": {
+    "area": 0.15997610986232758,
+    "n_up": 1,
+    "n_dn": 1
+  },
+  "hysteresis_pi": {
+    "area": 1.1072468757629395,
+    "n_up": 1,
+    "n_dn": 1
+  },
+  "policy_signal": "entropy",
+  "params": {
+    "run_dir": "/home/hjpae/cear_demo/outputs/runs/20260112_155917",
+    "warmup": 150,
+    "pre_window": 80,
+    "alpha": 0.05,
+    "consec": 3,
+    "L": 60,
+    "policy_signal": "entropy"
+  },
+  "meta": {
+    "period": 80,
+    "warmup": 150,
+    "T": 400
+  }
+}
