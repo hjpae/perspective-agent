@@ -1,0 +1,66 @@
+{
+  "seed": 0,
+  "steps": 80000,
+  "lr": 0.0003,
+  "device": "cpu",
+  "env_name": "forage",
+  "env_cfg": {
+    "grid_size": 5,
+    "time_budget": 500,
+    "move_cost": 1,
+    "forage_cost": 1,
+    "inspect_cost": 50,
+    "n_green": 2,
+    "n_red": 2,
+    "forage_bonus": 1.0,
+    "forage_penalty": 1.0,
+    "seed": 0,
+    "inspect_reveal_radius1": false
+  },
+  "loss_weights": {
+    "w_smooth": 0.25,
+    "w_entropy": 0.01,
+    "w_actor": 1.0
+  },
+  "actor_b": 0.98,
+  "warmup_steps": 20000,
+  "agent_cfg": {
+    "encoder": {
+      "obs_dim": 101,
+      "proprio_dim": 6,
+      "z_dim": 16,
+      "p_dim": 8,
+      "hidden": 64,
+      "dropout": 0.0
+    },
+    "world": {
+      "z_dim": 16,
+      "p_dim": 8,
+      "g_dim": 12,
+      "g_damping": 0.1,
+      "layernorm": true
+    },
+    "state": {
+      "z_dim": 16,
+      "p_dim": 8,
+      "g_dim": 12,
+      "s_dim": 16,
+      "hidden": 64,
+      "dropout": 0.0,
+      "g_influence": 1.0
+    },
+    "policy": {
+      "s_dim": 16,
+      "hidden": 64,
+      "n_actions": 6,
+      "dropout": 0.0
+    }
+  },
+  "decoder_cfg": {
+    "g_dim": 12,
+    "n_actions": 6,
+    "obs_dim": 101,
+    "hidden": 64,
+    "dropout": 0.0
+  }
+}
