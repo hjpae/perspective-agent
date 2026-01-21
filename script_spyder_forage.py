@@ -8,7 +8,7 @@ sys.argv = [
     "--steps", "80000",
     "--seed", "0",
     "--device", "cpu",
-    #"--view",
+    #"--view", "--fps", "10", "--render_every", "1",
 ]
 
 train_forage.main()
@@ -18,7 +18,7 @@ train_forage.main()
 import sys
 from cear_pilot.experiments import run_collect_forage
 
-CKPT_PATH = r"outputs/runs/20260120_201325/ckpt.pt"
+CKPT_PATH = r"outputs/runs/20260121_085356/ckpt.pt"
 
 sys.argv = [
     "run_collect_forage",
@@ -27,9 +27,8 @@ sys.argv = [
     "--seed", "0",
     "--device", "cpu",
     "--greedy",
-    "--view",
-    "--fps", "10",
-    # do(g) experiment: 
+    #"--view", "--fps", "10",
+    ## do(g) experiment: 
     # "--do_g", "swap",
     # "--do_g_scale", "1.0",
 ]

@@ -1,0 +1,120 @@
+{
+  "mode": "collect_forage",
+  "ckpt": "/home/hjpae/cear_demo/outputs/runs/20260121_085356/ckpt.pt",
+  "episodes": 5,
+  "seed": 0,
+  "device": "cpu",
+  "greedy": true,
+  "ablate_g": false,
+  "do_g": "",
+  "do_g_scale": 1.0,
+  "do_g_t": -1,
+  "do_g_mid": "",
+  "do_g_mid_scale": 1.0,
+  "save_latents": false,
+  "save_obs": false,
+  "env_cfg": {
+    "grid_size": 5,
+    "time_budget": 500,
+    "move_cost": 1,
+    "forage_cost": 1,
+    "inspect_cost": 50,
+    "n_green": 2,
+    "n_red": 2,
+    "forage_bonus": 1.0,
+    "forage_penalty": 1.0,
+    "seed": 0,
+    "inspect_reveal_radius1": false,
+    "k_green_progress": 1.0,
+    "red_threshold": 2,
+    "k_red_near": 0.02,
+    "k_object_entry": 1.0,
+    "k_forage_on_object": 3.0,
+    "k_forage_empty": 0.5,
+    "k_skip_forage": 0.02,
+    "revisit_coef": 0.002,
+    "idle_coef": 0.001,
+    "idle_cap": 5,
+    "k_time_cost": 0.002
+  },
+  "train_meta": {
+    "seed": 0,
+    "steps": 80000,
+    "lr": 0.0003,
+    "device": "cpu",
+    "env_name": "forage",
+    "env_cfg": {
+      "grid_size": 5,
+      "time_budget": 500,
+      "move_cost": 1,
+      "forage_cost": 1,
+      "inspect_cost": 50,
+      "n_green": 2,
+      "n_red": 2,
+      "forage_bonus": 1.0,
+      "forage_penalty": 1.0,
+      "seed": 0,
+      "inspect_reveal_radius1": false,
+      "k_green_progress": 1.0,
+      "red_threshold": 2,
+      "k_red_near": 0.02,
+      "k_object_entry": 1.0,
+      "k_forage_on_object": 3.0,
+      "k_forage_empty": 0.5,
+      "k_skip_forage": 0.02,
+      "revisit_coef": 0.002,
+      "idle_coef": 0.001,
+      "idle_cap": 5,
+      "k_time_cost": 0.002
+    },
+    "loss_weights": {
+      "w_smooth": 0.25
+    },
+    "agent_cfg": {
+      "encoder": {
+        "obs_dim": 101,
+        "proprio_dim": 6,
+        "z_dim": 16,
+        "p_dim": 8,
+        "hidden": 64,
+        "dropout": 0.0
+      },
+      "world": {
+        "z_dim": 16,
+        "p_dim": 8,
+        "g_dim": 12,
+        "g_damping": 0.1,
+        "layernorm": true
+      },
+      "state": {
+        "z_dim": 16,
+        "p_dim": 8,
+        "g_dim": 12,
+        "s_dim": 16,
+        "hidden": 64,
+        "dropout": 0.0,
+        "g_influence": 1.0
+      },
+      "policy": {
+        "s_dim": 16,
+        "hidden": 64,
+        "n_actions": 6,
+        "dropout": 0.0
+      }
+    },
+    "decoder_cfg": {
+      "g_dim": 12,
+      "n_actions": 6,
+      "obs_dim": 101,
+      "hidden": 64,
+      "dropout": 0.0
+    },
+    "cem": {
+      "pop": 32,
+      "elite_frac": 0.2,
+      "cem_alpha": 0.25,
+      "sigma_init": 0.1,
+      "sigma_floor": 0.02
+    }
+  }
+}
