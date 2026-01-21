@@ -838,7 +838,6 @@ print("Saved figs:", run_dir / "figs")
 from pathlib import Path
 import os, sys, subprocess, time
 
-
 # -----------------------
 # 0) Spyder-safe setup
 # -----------------------
@@ -866,14 +865,12 @@ def run_module(module: str, args: list[str]):
 def safe_sleep():
     time.sleep(0.5)
 
-
 # -----------------------
 # 1) Checkpoint
 # -----------------------
 TRAIN_ID = "20260109_144355"   # <-- change if needed
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 assert CKPT.exists(), f"Missing ckpt: {CKPT}"
-
 
 # -----------------------
 # 2) Experiment settings
@@ -895,7 +892,6 @@ ALPHA = 0.05
 CONSEC = 3
 L = 60
 POLICY_SIGNAL = "entropy"
-
 
 # -----------------------
 # 3) Run sweep + figures
