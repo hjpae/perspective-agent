@@ -71,7 +71,7 @@ if __name__ == "__main__":
       # "--p_slip","0.60","0.30","0.0",
 
       # "--mirror_x", 
-      "--mirror_actions",
+      # "--mirror_actions",
 
       # "--view",
       # "--view_every", "2",
