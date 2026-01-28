@@ -13,7 +13,7 @@ class WorldLatentConfig:
     z_dim: int = 16
     p_dim: int = 8
     g_dim: int = 12
-    g_damping: float = 0.10       # slow update
+    g_damping: float = 0.1       # slow update
     layernorm: bool = True
 
 

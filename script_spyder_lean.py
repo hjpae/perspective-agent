@@ -51,7 +51,7 @@ if __name__ == "__main__":
       "--steps","40000",
       
       #"--ckpt", "outputs/runs/20260109_144355/ckpt.pt",
-      "--ckpt", "outputs/runs/20260127_215133/ckpt.pt",
+      "--ckpt", "outputs/runs/20260128_005607/ckpt.pt",
       "--seed", "0",
       "--steps", "240",
       "--sigmas", "0.60,0.30,0.05", "0.05,0.30,0.60", "0.30,0.30,0.30",
@@ -96,16 +96,16 @@ def safe_sleep():
 # -----------------------
 # 1) Checkpoint
 # -----------------------
-TRAIN_ID = "20260109_144355"   # <-- change if needed
+TRAIN_ID = "20260128_005607 g0.20"   # <-- change if needed
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 assert CKPT.exists(), f"Missing ckpt: {CKPT}"
 
 # -----------------------
 # 2) Experiment settings
 # -----------------------
-T_TOTAL = 400
+T_TOTAL = 550
 WARMUP  = 150
-PERIODS = [10, 20, 40, 80]
+PERIODS = [20, 40, 80]
 
 SIGMA_A = (0.60, 0.30, 0.05)
 SIGMA_B = (0.05, 0.30, 0.60)
@@ -322,7 +322,7 @@ def run_pygame_rollout(
 # -----------------------
 # CALL IT (edit this)
 # -----------------------
-CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260127_215133 - =144355" / "ckpt.pt").resolve())
+CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260128_010139" / "ckpt.pt").resolve())
 
 run_pygame_rollout(
     ckpt_path=CKPT,

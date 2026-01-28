@@ -112,8 +112,15 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location=device)
     meta = ckpt["meta"]
+    meta["agent_cfg"]["world"]["g_damping"] = 0.1
+    print("[OVERRIDE] set g_damping =", meta["agent_cfg"]["world"]["g_damping"])
+
 
     agent, decoder, env = build_agent_from_meta(meta, device=device, max_steps_override=args.T)
+    print("[CKPT meta] g_damping =", meta["agent_cfg"]["world"].get("g_damping", None))
+    print("[Agent cfg] g_damping =", agent.cfg.world.g_damping)
+    print("[WorldLatent cfg] g_damping =", agent.world.cfg.g_damping)
+
     agent.load_state_dict(ckpt["agent_state"])
     decoder.load_state_dict(ckpt["decoder_state"])
     agent.to(device).eval()
