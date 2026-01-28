@@ -1,6 +1,0 @@
-episode,return,steps,n_move,n_inspect,n_forage,n_pos_forage,n_neg_forage,inspect_rate,forage_pos_rate,forage_neg_rate,postinspect_forage_frac,postinspect_good_forage_frac
-0,4.892165216706386,74,75,0,0,0,0,0.0,0.0,0.0,0.0,0.0
-1,24.98106975441638,51,52,0,0,0,0,0.0,0.0,0.0,0.0,0.0
-2,8.847713516232549,19,20,0,0,0,0,0.0,0.0,0.0,0.0,0.0
-3,5.9024706706102315,11,12,0,0,0,0,0.0,0.0,0.0,0.0,0.0
-4,2.9698382395419203,4,5,0,0,0,0,0.0,0.0,0.0,0.0,0.0

@@ -32,4 +32,4 @@ if __name__ == "__main__":
     ]
     main()
     
-// ckpts | github demo: 20260109_144355 | AAAI paper: 20260127_215133
+// ckpts | github demo: 20260109_144355 | AAAI paper: 20260127_215133 ... but used github demo anyways

@@ -959,7 +959,7 @@ for P in PERIODS:
 
 print("\nALL DONE.")
 
-#%% 
+#%% pygame gif (testing runs)
 # -----------------------
 # PYGAME ROLLOUT (Spyder)
 # -----------------------
@@ -1098,7 +1098,7 @@ def run_pygame_rollout(
 # -----------------------
 # CALL IT (edit this)
 # -----------------------
-CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260127_215133" / "ckpt.pt").resolve())
+CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260127_215133 - =144355" / "ckpt.pt").resolve())
 
 run_pygame_rollout(
     ckpt_path=CKPT,
@@ -1113,102 +1113,106 @@ run_pygame_rollout(
     #sigma=(0.05, 0.30, 0.60),  # optional: force regime B
 )
 
-# %% z PCA analysis for CEAR rollout logs (traj.parquet / traj.csv)
-import os
+#%% z PCA
 from pathlib import Path
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+import os, sys, subprocess, time
 
-# ----------------------------
-# 1) Set path to run_dir
-# ----------------------------
-RUN_DIR = Path(r"outputs/runs/20260127_215133")  
+# -----------------------
+# 0) Make execution robust in Spyder
+# -----------------------
+PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
 
-traj_parq = RUN_DIR / "traj.parquet"
-traj_csv  = RUN_DIR / "traj.csv"
+print("PROJECT_ROOT:", PROJECT_ROOT)
+print("CWD:", Path.cwd())
 
-if traj_parq.exists():
-    df = pd.read_parquet(traj_parq)
-elif traj_csv.exists():
-    df = pd.read_csv(traj_csv)
-else:
-    raise FileNotFoundError(f"traj.parquet/csv not found in {RUN_DIR}")
+RUNS_DIR = PROJECT_ROOT / "outputs" / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ----------------------------
-# 2) Check z columns exist
-# ----------------------------
-z_cols = [c for c in df.columns if c.startswith("z_")]
-if len(z_cols) == 0:
-    raise RuntimeError("No z_* columns found. Did you run run_collect.py from the updated version?")
+def newest_run_dir() -> Path:
+    dirs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
+    if not dirs:
+        raise FileNotFoundError(f"No run directories found in {RUNS_DIR}")
+    return max(dirs, key=lambda p: p.stat().st_mtime)
 
-print("Found z dims:", len(z_cols))
-print("Example columns:", z_cols[:5])
+def run_module(module: str, args: list[str]):
+    cmd = [sys.executable, "-m", module] + args
+    print("\nRunning:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
-# ----------------------------
-# 3) Build Z matrix (N x Dz)
-# ----------------------------
-Z = df[z_cols].to_numpy(dtype=np.float32)
+def safe_sleep():
+    time.sleep(0.6)
 
-# optional: filter by episode if you want
-# df = df[df["episode"] == 0].copy()
-# Z = df[z_cols].to_numpy(dtype=np.float32)
+# -----------------------
+# 1) Point to your trained checkpoint
+# -----------------------
+TRAIN_ID = "20260109_144355"   # <-- ckpt run id
+CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
+if not CKPT.exists():
+    raise FileNotFoundError(f"Checkpoint not found: {CKPT}")
 
-# standardize (recommended for PCA)
-Z_mean = Z.mean(axis=0, keepdims=True)
-Z_std  = Z.std(axis=0, keepdims=True) + 1e-8
-Zs = (Z - Z_mean) / Z_std
+# -----------------------
+# A) Collect (g ON) + Figure A + z PCA
+# -----------------------
+print("\n=== A) Collect (g ON) ===")
+run_module("cear_pilot.experiments.run_collect", [
+    "--ckpt", str(CKPT),
+    "--episodes", "30",
+    "--greedy",
+])
+safe_sleep()
+collect_run = newest_run_dir()
+print("Detected collect run:", collect_run)
 
-# ----------------------------
-# 4) PCA via SVD (no sklearn needed)
-# ----------------------------
-# Zs: N x Dz
-U, S, Vt = np.linalg.svd(Zs, full_matrices=False)
-# principal components in data space: PC scores = Zs @ Vt.T
-PC = Zs @ Vt.T  # N x Dz
-pc1, pc2 = PC[:, 0], PC[:, 1]
+print("\n=== A) Embed + Figure A ===")
+run_module("cear_pilot.analysis.embed_latents", [
+    "--run_dir", str(collect_run),
+])
+run_module("cear_pilot.analysis.figure_attractor", [
+    "--run_dir", str(collect_run),
+    "--lines",
+])
+print("Figure A done for:", collect_run)
 
-# explained variance ratio
-# eigenvalues proportional to S^2/(N-1)
-eigvals = (S**2) / (max(1, (Zs.shape[0] - 1)))
-evr = eigvals / eigvals.sum()
-print("Explained variance ratio: PC1, PC2 =", float(evr[0]), float(evr[1]))
+print("\n=== A) z PCA ===")
+run_module("cear_pilot.analysis.pca_z", [
+    "--run_dir", str(collect_run),
+    "--color", "zone_id",
+    "--lines",
+])
+print("z PCA done for:", collect_run)
 
-# ----------------------------
-# 5) Plot
-# ----------------------------
-# choose color label: zone_id is always logged
-label = df["zone_id"].to_numpy() if "zone_id" in df.columns else None
+# -----------------------
+# C) Perturbation + Figure C + z PCA
+# -----------------------
+print("\n=== C) Perturbation run ===")
+run_module("cear_pilot.experiments.run_perturb", [
+    "--ckpt", str(CKPT),
+    "--t_perturb", "80",
+    "--kind", "shock",
+    "--scale", "1.0",
+    "--greedy",
+])
+safe_sleep()
+perturb_run = newest_run_dir()
+print("Detected perturb run:", perturb_run)
 
-plt.figure()
-if label is None:
-    plt.scatter(pc1, pc2, s=6)
-else:
-    plt.scatter(pc1, pc2, c=label, s=6)  # default colormap
-plt.xlabel(f"PC1 (EVR={evr[0]:.3f})")
-plt.ylabel(f"PC2 (EVR={evr[1]:.3f})")
-plt.title("PCA of z")
-plt.tight_layout()
-plt.show()
+print("\n=== C) Figure C ===")
+run_module("cear_pilot.analysis.figure_perturb", [
+    "--run_dir", str(perturb_run),
+])
 
-# ----------------------------
-# 6) Optional: per-episode plot (helps see trajectories)
-# ----------------------------
-if "episode" in df.columns:
-    eps = sorted(df["episode"].unique().tolist())
-    # plot first few episodes only
-    eps = eps[:5]
-    plt.figure()
-    for ep in eps:
-        m = (df["episode"].to_numpy() == ep)
-        plt.plot(pc1[m], pc2[m], linewidth=1.0, alpha=0.8, label=f"ep{ep}")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title("z trajectory in PCA space (first episodes)")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+print("\n=== C) z PCA ===")
+run_module("cear_pilot.analysis.pca_z", [
+    "--run_dir", str(perturb_run),
+    "--color", "zone_id",
+    "--lines",
+])
+print("z PCA done for:", perturb_run)
 
-
-
-
+print("\n ALL DONE.")
+print("Figure A:", collect_run / "figs")
+print("Figure C:", perturb_run / "figs")
+print("z PCA A:", collect_run / "figs" / "z_pca_scatter.png")
+print("z PCA C:", perturb_run / "figs" / "z_pca_scatter.png")
