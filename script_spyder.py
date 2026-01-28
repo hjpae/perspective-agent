@@ -13,7 +13,7 @@ if __name__ == "__main__":
     sys.argv = [
         str(Path(__file__).name),
         "--device", "cpu",          # or "cuda"
-        "--steps", "80000",
+        "--steps", "60000",
         # "--view"  # NOT set
     ]
     main()
@@ -70,6 +70,9 @@ if __name__ == "__main__":
       # "--use_slip",
       # "--p_slip","0.60","0.30","0.0",
 
+      # "--mirror_x", 
+      "--mirror_actions",
+
       # "--view",
       # "--view_every", "2",
       # "--view_fps", "20",
@@ -94,7 +97,8 @@ if __name__ == "__main__":
       "--device","cpu",
       "--steps","40000",
       
-      "--ckpt", "outputs/runs/20260109_144355/ckpt.pt",
+      #"--ckpt", "outputs/runs/20260109_144355/ckpt.pt",
+      "--ckpt", "outputs/runs/20260127_215133/ckpt.pt",
       "--seed", "0",
       "--steps", "240",
       "--sigmas", "0.60,0.30,0.05", "0.05,0.30,0.60", "0.30,0.30,0.30",
@@ -1094,7 +1098,7 @@ def run_pygame_rollout(
 # -----------------------
 # CALL IT (edit this)
 # -----------------------
-CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260109_144355" / "ckpt.pt").resolve())
+CKPT = str((Path(__file__).resolve().parent / "outputs" / "runs" / "20260127_215133" / "ckpt.pt").resolve())
 
 run_pygame_rollout(
     ckpt_path=CKPT,
@@ -1108,4 +1112,103 @@ run_pygame_rollout(
     #sigma=(0.60, 0.30, 0.05),  # optional: force regime A
     #sigma=(0.05, 0.30, 0.60),  # optional: force regime B
 )
+
+# %% z PCA analysis for CEAR rollout logs (traj.parquet / traj.csv)
+import os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ----------------------------
+# 1) Set path to run_dir
+# ----------------------------
+RUN_DIR = Path(r"outputs/runs/20260127_215133")  
+
+traj_parq = RUN_DIR / "traj.parquet"
+traj_csv  = RUN_DIR / "traj.csv"
+
+if traj_parq.exists():
+    df = pd.read_parquet(traj_parq)
+elif traj_csv.exists():
+    df = pd.read_csv(traj_csv)
+else:
+    raise FileNotFoundError(f"traj.parquet/csv not found in {RUN_DIR}")
+
+# ----------------------------
+# 2) Check z columns exist
+# ----------------------------
+z_cols = [c for c in df.columns if c.startswith("z_")]
+if len(z_cols) == 0:
+    raise RuntimeError("No z_* columns found. Did you run run_collect.py from the updated version?")
+
+print("Found z dims:", len(z_cols))
+print("Example columns:", z_cols[:5])
+
+# ----------------------------
+# 3) Build Z matrix (N x Dz)
+# ----------------------------
+Z = df[z_cols].to_numpy(dtype=np.float32)
+
+# optional: filter by episode if you want
+# df = df[df["episode"] == 0].copy()
+# Z = df[z_cols].to_numpy(dtype=np.float32)
+
+# standardize (recommended for PCA)
+Z_mean = Z.mean(axis=0, keepdims=True)
+Z_std  = Z.std(axis=0, keepdims=True) + 1e-8
+Zs = (Z - Z_mean) / Z_std
+
+# ----------------------------
+# 4) PCA via SVD (no sklearn needed)
+# ----------------------------
+# Zs: N x Dz
+U, S, Vt = np.linalg.svd(Zs, full_matrices=False)
+# principal components in data space: PC scores = Zs @ Vt.T
+PC = Zs @ Vt.T  # N x Dz
+pc1, pc2 = PC[:, 0], PC[:, 1]
+
+# explained variance ratio
+# eigenvalues proportional to S^2/(N-1)
+eigvals = (S**2) / (max(1, (Zs.shape[0] - 1)))
+evr = eigvals / eigvals.sum()
+print("Explained variance ratio: PC1, PC2 =", float(evr[0]), float(evr[1]))
+
+# ----------------------------
+# 5) Plot
+# ----------------------------
+# choose color label: zone_id is always logged
+label = df["zone_id"].to_numpy() if "zone_id" in df.columns else None
+
+plt.figure()
+if label is None:
+    plt.scatter(pc1, pc2, s=6)
+else:
+    plt.scatter(pc1, pc2, c=label, s=6)  # default colormap
+plt.xlabel(f"PC1 (EVR={evr[0]:.3f})")
+plt.ylabel(f"PC2 (EVR={evr[1]:.3f})")
+plt.title("PCA of z")
+plt.tight_layout()
+plt.show()
+
+# ----------------------------
+# 6) Optional: per-episode plot (helps see trajectories)
+# ----------------------------
+if "episode" in df.columns:
+    eps = sorted(df["episode"].unique().tolist())
+    # plot first few episodes only
+    eps = eps[:5]
+    plt.figure()
+    for ep in eps:
+        m = (df["episode"].to_numpy() == ep)
+        plt.plot(pc1[m], pc2[m], linewidth=1.0, alpha=0.8, label=f"ep{ep}")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.title("z trajectory in PCA space (first episodes)")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+
 

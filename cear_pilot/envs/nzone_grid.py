@@ -45,7 +45,7 @@ class NZoneConfig:
     max_steps: int = 240
 
     # observation mean separation scale (Phase 2 default)
-    zone_mu_scale: float = 0.5  # Phase 1: was 2.5 
+    zone_mu_scale: float = 0.5  # Phase 1: was 2.5
 
     # per-zone observation noise
     zone_sigma: Tuple[float, float, float] = (0.60, 0.30, 0.05)  # z0 volatile
@@ -70,7 +70,7 @@ class NZoneConfig:
     # 3. Volatility/Nonstability: slip/drift parameters can change over time
     volatile_zone: int = 0
     volatile_period: int = 40
-    volatile_strength: float = 0.0  # something like additional slip probability / drift randomness
+    volatile_strength: float = 0.0  # additional slip probability / drift randomness
 
     # 4. Hazard: ext. penalty-less version
     hazard_mode: str = "teleport"  # "teleport" / "sensor_blackout" / "reset"
@@ -78,9 +78,13 @@ class NZoneConfig:
     hazard_teleport_to: Tuple[int, int] = (0, 0)
     hazard_blackout_steps: int = 6  # only used for sensor_blackout
 
-    # Observation regime control (for Phase 2 ... mu scale too large for g to detect env tweaks)
+    # Observation regime control
     phase2_obs_mu_scale: float = 0.5
     phase2_obs_equal_sigma: bool = True
+
+    # --- Mirror control (left-right reflection) ---
+    mirror_x: bool = False          # if True, left-right mirror the world
+    mirror_actions: bool = True     # if True, swap LEFT/RIGHT action semantics
 
 
 # -------------------------
@@ -165,10 +169,32 @@ class NZoneGridEnv(gym.Env):
         else:
             self._zone_sigma = np.array(self.cfg.zone_sigma, dtype=np.float32)
 
+    # -----------------
+    # Mirror helpers
+    # -----------------
+    def _mx(self, x: int) -> int:
+        """Mirror x coordinate (for reporting + zone assignment)."""
+        return (self.W - 1 - int(x)) if self.cfg.mirror_x else int(x)
+
+    def _swap_lr(self, action: int) -> int:
+        """Swap LEFT/RIGHT actions if mirror_actions is enabled."""
+        if not (self.cfg.mirror_x and self.cfg.mirror_actions):
+            return int(action)
+        if action == self.ACTION_LEFT:
+            return self.ACTION_RIGHT
+        if action == self.ACTION_RIGHT:
+            return self.ACTION_LEFT
+        return int(action)
+
+    # -----------------
+    # Core zone logic (MIRROR-AWARE)
+    # -----------------
     def zone_id(self) -> int:
-        if self.x < self.W / 3:
+        # IMPORTANT: zone should be determined in mirrored coordinates when mirror_x=True
+        x_eff = self._mx(self.x)
+        if x_eff < self.W / 3:
             return 0
-        elif self.x < 2 * self.W / 3:
+        elif x_eff < 2 * self.W / 3:
             return 1
         else:
             return 2
@@ -179,6 +205,7 @@ class NZoneGridEnv(gym.Env):
         return x, y
 
     def _reverse_action(self, action: int) -> int:
+        # Note: reverse is defined in "effective action space" after mirroring.
         if action == self.ACTION_UP:
             return self.ACTION_DOWN
         if action == self.ACTION_DOWN:
@@ -201,8 +228,10 @@ class NZoneGridEnv(gym.Env):
         obs = mu + self._rng.normal(0, sigma, size=(self.base_obs_dim,)).astype(np.float32)
 
         if self.cfg.include_xy:
+            # IMPORTANT: report x in mirrored coordinates for consistency with zone_id/logging
+            x_rep = self._mx(self.x)
             obs_xy = np.array(
-                [self.x / max(1, self.W - 1), self.y / max(1, self.H - 1)],
+                [x_rep / max(1, self.W - 1), self.y / max(1, self.H - 1)],
                 dtype=np.float32,
             )
             obs = np.concatenate([obs, obs_xy], axis=0)
@@ -228,14 +257,12 @@ class NZoneGridEnv(gym.Env):
         if self._rng.random() >= p:
             return action, False
 
-        # slipped
         mode = str(self.cfg.slip_mode).lower().strip()
         if mode == "stay":
             return self.ACTION_STAY, True
         if mode == "reverse":
             return self._reverse_action(action), True
 
-        # default: random_action (including stay)
         return int(self._rng.integers(0, 5)), True
 
     def _apply_drift(self, x: int, y: int, zid: int) -> Tuple[int, int, bool]:
@@ -268,16 +295,13 @@ class NZoneGridEnv(gym.Env):
 
         strength = float(max(0.0, self.cfg.volatile_strength))
 
-        # (a) slip: add random delta in [-strength, +strength]
         if self.cfg.use_slip and strength > 0.0:
             delta = (self._rng.random() * 2.0 - 1.0) * strength
             self._p_slip_rt[zid] = float(np.clip(self._p_slip_rt[zid] + delta, 0.0, 1.0))
 
-        # (b) drift: randomly rotate/flip drift direction with probability ~ strength
         if self.cfg.use_drift and strength > 0.0:
             if self._rng.random() < min(1.0, strength):
                 dx, dy = self._drift_vec_rt[zid]
-                # rotate 90deg: (dx,dy)->(-dy,dx), then maybe flip sign
                 ndx, ndy = -int(dy), int(dx)
                 if self._rng.random() < 0.5:
                     ndx, ndy = -ndx, -ndy
@@ -305,12 +329,10 @@ class NZoneGridEnv(gym.Env):
             return x, y, True
 
         if mode == "reset":
-            # reset-like: move to center, keep time running (no truncation)
             cx, cy = self.W // 2, self.H // 2
             cx, cy = self._clip_xy(cx, cy)
             return cx, cy, True
 
-        # unknown hazard mode -> no-op
         return x, y, False
 
     # -----------------
@@ -344,7 +366,7 @@ class NZoneGridEnv(gym.Env):
         obs = self._observe()
         info = {
             "zone_id": self.zone_id(),
-            "x": self.x,
+            "x": self._mx(self.x),  # IMPORTANT: report mirrored x
             "y": self.y,
             "t": self.t,
             "phase2_active": self._phase2_active(),
@@ -354,7 +376,10 @@ class NZoneGridEnv(gym.Env):
     def step(self, action: int):
         if not isinstance(action, (int, np.integer)):
             raise ValueError(f"Action must be int, got {type(action)}")
+
         action = int(action)
+        # IMPORTANT: mirror action semantics early (for mirror control)
+        action = self._swap_lr(action)
 
         if action < 0 or action > 4:
             raise ValueError(f"Invalid action: {action}")
@@ -362,7 +387,7 @@ class NZoneGridEnv(gym.Env):
         old_pos = (self.x, self.y)
         zid_before = self.zone_id()
 
-        # Volatility update happens at the start of step (affects parameters used this step)
+        # Volatility update at start (affects this step)
         volatility_event = self._update_volatility(zid_before)
 
         # 1) Slip: possibly corrupt action (based on zone before movement)
@@ -383,10 +408,10 @@ class NZoneGridEnv(gym.Env):
 
         x, y = self._clip_xy(x, y)
 
-        # 2) Drift: apply after action move (based on zone before movement for simplicity)
+        # 2) Drift
         x, y, drifted = self._apply_drift(x, y, zid_before)
 
-        # 4) Hazard: event (based on zone after movement tends to feel intuitive; choose after-move zone)
+        # 4) Hazard (based on zone after movement)
         self.x, self.y = x, y
         zid_after_move = self.zone_id()
         x, y, hazard_event = self._apply_hazard(self.x, self.y, zid_after_move)
@@ -395,7 +420,7 @@ class NZoneGridEnv(gym.Env):
         # time update
         self.t += 1
 
-        # hazard sensor blackout countdown
+        # blackout countdown
         if self._blackout_timer > 0:
             self._blackout_timer -= 1
 
@@ -404,15 +429,13 @@ class NZoneGridEnv(gym.Env):
 
         obs = self._observe()
 
-        # No reward shaping in Phase 2: always 0.0
         reward = 0.0
-
         terminated = False
         truncated = self.t >= self.max_steps
 
         info = {
             "zone_id": self.zone_id(),
-            "x": self.x,
+            "x": self._mx(self.x),  # IMPORTANT: report mirrored x
             "y": self.y,
             "t": self.t,
 
@@ -427,7 +450,7 @@ class NZoneGridEnv(gym.Env):
             "blackout_timer": int(self._blackout_timer),
             "volatility_update": bool(volatility_event),
 
-            # expose current runtime params for analysis/debug
+            # expose runtime params (for analysis/debug)
             "p_slip_rt": float(self._p_slip_rt[self.zone_id()]),
             "p_drift_rt": float(self._p_drift_rt[self.zone_id()]),
             "drift_vec_rt": tuple(self._drift_vec_rt[self.zone_id()]),
@@ -449,7 +472,7 @@ class NZoneGridEnv(gym.Env):
         grid[self.y][self.x] = "A"
         s = "\n".join("".join(row) for row in grid)
         print(s)
-        print(f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y}) blackout={self._blackout_timer}")
+        print(f"t={self.t} zone={self.zone_id()} pos=({self._mx(self.x)},{self.y}) blackout={self._blackout_timer}")
 
     def _render_rgb(self):
         cell = 24
@@ -464,19 +487,22 @@ class NZoneGridEnv(gym.Env):
             dtype=np.uint8,
         )
 
+        # IMPORTANT: color zones using mirrored-x ecology so the visualization matches zone_id()
         for y in range(self.H):
             for x in range(self.W):
-                zid = 0
-                if x >= self.W / 3 and x < 2 * self.W / 3:
+                x_eff = self._mx(x)  # mirror for ecology visualization
+                if x_eff < self.W / 3:
+                    zid = 0
+                elif x_eff < 2 * self.W / 3:
                     zid = 1
-                elif x >= 2 * self.W / 3:
+                else:
                     zid = 2
 
                 y0, y1 = y * cell, (y + 1) * cell
                 x0, x1 = x * cell, (x + 1) * cell
                 img[y0:y1, x0:x1] = zone_colors[zid]
 
-        # agent (black square)
+        # agent (black square at TRUE coordinates)
         ay, ax = self.y, self.x
         y0, y1 = ay * cell, (ay + 1) * cell
         x0, x1 = ax * cell, (ax + 1) * cell

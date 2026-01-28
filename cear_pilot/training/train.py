@@ -108,6 +108,10 @@ def main():
     ap.add_argument("--height", type=int, default=9)
     ap.add_argument("--obs_dim", type=int, default=8)
     ap.add_argument("--max_steps", type=int, default=240)
+    
+    ap.add_argument("--mirror_x", action="store_true")
+    ap.add_argument("--mirror_actions", action="store_true")
+
 
     # actor term (Dreamer-like; internal cost, not env reward)
     ap.add_argument(
