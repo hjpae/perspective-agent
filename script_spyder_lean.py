@@ -10,54 +10,53 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from cear_pilot.training.train import main
 
-if __name__ == "__main__":
-    sys.argv = [
-      str(Path(__file__).name),
-      "--device","cpu",
-      "--steps","40000",
+# if __name__ == "__main__":
+#     sys.argv = [
+#       str(Path(__file__).name),
+#       "--device","cpu",
+#       "--steps","48000",
+#       "--seed","4",
+     
+#       "--w_entropy","0.001",
+#       "--w_actor","0.25",
+#       "--actor_b","0.98",
       
-      "--w_entropy","0.001",
-      "--w_actor","0.25",
-      "--actor_b","0.98",
-      
-      # "--use_slip",
-      # "--p_slip","0.60","0.30","0.0",
+#       # "--use_slip",
+#       # "--p_slip","0.60","0.30","0.0",
 
-      # "--mirror_x", 
-      # "--mirror_actions",
+#       # "--mirror_x", 
+#       # "--mirror_actions",
 
-      # "--view",
-      # "--view_every", "2",
-      # "--view_fps", "20",
-      # "--view_cell_px", "42",
-    ]
-    main()
+#       # "--view",
+#       # "--view_every", "2",
+#       # "--view_fps", "20",
+#       # "--view_cell_px", "42",
+#     ]
+#     main()
+
+BASE_ARGS = [
+    "--device","cpu",
+    "--steps","48000",
+
+    "--w_entropy","0.001",
+    "--w_actor","0.25",
+    "--actor_b","0.98",
     
-#%% testing/zone comparison for demo purpose (g for eval index)
-import sys
-from pathlib import Path
-import os
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-os.chdir(PROJECT_ROOT)
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from cear_pilot.testing import main
+    "--log_traj",
+    "--log_every","1",
+]
 
 if __name__ == "__main__":
-    sys.argv = [
-      str(Path(__file__).name),
-      "--device","cpu",
-      "--steps","40000",
-      
-      #"--ckpt", "outputs/runs/20260109_144355/ckpt.pt",
-      "--ckpt", "outputs/runs/20260128_005607/ckpt.pt",
-      "--seed", "0",
-      "--steps", "240",
-      "--sigmas", "0.60,0.30,0.05", "0.05,0.30,0.60", "0.30,0.30,0.30",
-      
-    ]
-    main()
+    script_name = str(Path(__file__).name)
+
+    for seed in [1, 2, 3, 4, 5]:
+        sys.argv = [script_name] + BASE_ARGS + ["--seed", str(seed)]
+        print(f"\n===== Running seed={seed} =====")
+        main()
+    
+#%% plot the zone occupancy 
+
+
 
 #%%
 # script_switch_sweep_eval_spyder.py

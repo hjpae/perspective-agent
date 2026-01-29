@@ -22,6 +22,7 @@ from cear_pilot.envs.nzone_grid import NZoneConfig, NZoneGridEnv
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
+import pandas as pd
 
 # ---------------------------
 # utils
@@ -96,7 +97,7 @@ class EMAMeanVar:
 def main():
     ap = argparse.ArgumentParser()
 
-    ap.add_argument("--steps", type=int, default=80000)
+    ap.add_argument("--steps", type=int, default=48000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
@@ -112,6 +113,11 @@ def main():
     ap.add_argument("--mirror_x", action="store_true")
     ap.add_argument("--mirror_actions", action="store_true")
 
+    # ---------------------------
+    # MINIMAL TRAJ LOGGING (NEW)
+    # ---------------------------
+    ap.add_argument("--log_traj", action="store_true", help="Save per-step training trajectory to train_traj.parquet")
+    ap.add_argument("--log_every", type=int, default=1, help="Log every N steps (1 = log all steps)")
 
     # actor term (Dreamer-like; internal cost, not env reward)
     ap.add_argument(
@@ -155,7 +161,7 @@ def main():
     args = ap.parse_args()
 
     # ---------------------------
-    # SEED (this is the "fix" for the weird determinism feeling)
+    # SEED
     # ---------------------------
     seed_everything(args.seed, deterministic=True)
 
@@ -265,8 +271,18 @@ def main():
             "view_fps": int(args.view_fps),
             "view_cell_px": int(args.view_cell_px),
         },
+        "traj_logging": {
+            "enabled": bool(args.log_traj),
+            "log_every": int(max(1, args.log_every)),
+        },
     }
     save_meta(run_dir, meta)
+
+    # ---------------------------
+    # MINIMAL TRAJ LOGGING (NEW)
+    # ---------------------------
+    log_rows = []
+    log_every = int(max(1, args.log_every))
 
     # ---- live viewer init ----
     viewer = None
@@ -305,6 +321,7 @@ def main():
 
     t0 = time.time()
     episode = 0
+    t_in_ep = 0  # (NEW) track step within episode
 
     try:
         for step in range(args.steps):
@@ -376,7 +393,6 @@ def main():
             w_actor_eff = 0.0 if step < warmup_steps else args.w_actor
 
             # ---------- adaptive entropy coefficient eps (tiny, but prevents "sudden collapse")
-            # If entropy collapses too low, temporarily increase entropy push.
             with torch.no_grad():
                 H = float(entropy.item())
                 H_target = 1.0  # heuristic: keep some diversity for g trajectory richness
@@ -398,6 +414,33 @@ def main():
             obs = obs_next
             last_action = a_int
 
+            # ---------- MINIMAL TRAJ LOGGING (NEW)
+            if args.log_traj and ((step % log_every) == 0):
+                # zone index usually in info; fallback robustly
+                z = info.get("zone", None)
+                if z is None:
+                    z = info.get("zone_id", None)
+                if isinstance(z, (int, np.integer)):
+                    z = int(z)
+                else:
+                    z = -1  # unknown
+
+                with torch.no_grad():
+                    g_norm = float(torch.linalg.vector_norm(g_t).item())
+                    ent_val = float(entropy.item())
+
+                log_rows.append({
+                    "t_global": int(step),
+                    "episode": int(episode),
+                    "t_in_ep": int(t_in_ep),
+                    "zone_id": int(z),
+                    "action": int(a_int),
+                    "entropy": float(ent_val),
+                    "g_norm": float(g_norm),
+                    "loss_pred": float(loss_pred.item()),
+                    "loss_smooth": float(loss_smooth.item()),
+                })
+
             # ---------- viewer draw
             if viewer is not None and (step % max(1, args.view_every) == 0):
                 g_norm = float(torch.linalg.vector_norm(g_t.detach()).item())
@@ -417,15 +460,16 @@ def main():
                     break
 
             # ---------- episode reset
+            t_in_ep += 1
             if truncated or terminated:
                 obs, info = env.reset(seed=args.seed + episode + 1)
                 agent.reset(batch_size=1)
                 last_action = 4
                 g_prev = agent.get_latents()["g"].detach().clone()
                 episode += 1
+                t_in_ep = 0
 
             # ---------- rolling stats
-            # policy diagnostics on action policy
             with torch.no_grad():
                 maxpi = float(pi_act.max(dim=-1).values.mean().item())
                 if pi_prev is None:
@@ -441,20 +485,16 @@ def main():
                 maxpi_ema = maxpi if (maxpi_ema is None) else (0.98 * maxpi_ema + 0.02 * maxpi)
                 kl_ema = kl if (kl_ema is None) else (0.98 * kl_ema + 0.02 * kl)
 
-                # logits magnitude (helps see “policy saturating”)
                 ln = float(torch.mean(torch.abs(logits_act)).item())
                 logits_norm_ema = ln if (logits_norm_ema is None) else (0.98 * logits_norm_ema + 0.02 * ln)
 
-            # hist for last window (approx)
             act_hist[a_int] += 1
-            # zone index usually in info; fallback robustly
             z = info.get("zone", None)
             if z is None:
                 z = info.get("zone_id", None)
             if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 2:
                 zone_hist[int(z)] += 1
 
-            # EMA of world loss (for readability)
             lw = float(loss_world.item())
             ema_world = lw if ema_world is None else 0.98 * ema_world + 0.02 * lw
 
@@ -462,16 +502,13 @@ def main():
             if (step + 1) % 2000 == 0:
                 dt = time.time() - t0
 
-                # per-action err diagnostics (for “signal exists?”)
                 with torch.no_grad():
                     e_det = per_a_err.detach().float().cpu().numpy()
                     e_min, e_max, e_std = float(e_det.min()), float(e_det.max()), float(e_det.std())
 
-                # normalize hists
                 act_prob = (act_hist / max(act_hist.sum(), 1)).tolist()
                 zone_prob = (zone_hist / max(zone_hist.sum(), 1)).tolist()
 
-                # reset window counts
                 act_hist[:] = 0
                 zone_hist[:] = 0
 
@@ -492,6 +529,23 @@ def main():
     finally:
         if viewer is not None:
             viewer.close()
+
+    # ---------------------------
+    # SAVE TRAJ (NEW)
+    # ---------------------------
+    if args.log_traj and len(log_rows) > 0:
+        df = pd.DataFrame(log_rows)
+    
+        out_parquet = run_dir / "train_traj.parquet"
+        out_csv = run_dir / "train_traj.csv"
+    
+        try:
+            df.to_parquet(out_parquet, index=False)
+            print(f"Saved training trajectory to: {out_parquet}")
+        except Exception as e:
+            print(f"[WARN] Parquet failed ({type(e).__name__}: {e}). Falling back to CSV.")
+            df.to_csv(out_csv, index=False)
+            print(f"Saved training trajectory to: {out_csv}")
 
     ckpt = {
         "agent_state": agent.state_dict(),

@@ -1,0 +1,7 @@
+run_dir: /home/hjpae/cear_demo/outputs/runs/20260127_224317
+z_dims: 16
+points_used_for_scatter: 7200 / 7200
+EVR_PC1: 0.684883
+EVR_PC2: 0.279249
+saved_scatter: z_pca_scatter.png
+saved_lines: z_pca_lines.png
