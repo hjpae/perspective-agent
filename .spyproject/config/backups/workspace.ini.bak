@@ -4,7 +4,7 @@ save_data_on_exit = True
 save_history = True
 save_non_project_files = False
 project_type = 'empty-project-type'
-recent_files = ['script_spyder.py', 'cear_pilot/analysis/figure_attractor.py', 'cear_pilot/analysis/embed_latents.py']
+recent_files = ['script_spyder_lean.py', 'cear_pilot/analysis/plot_hysteresis_metrics.py', 'cear_pilot/experiments/run_switch_sweep.py', 'cear_pilot/analysis/figure_switch_eval.py', 'cear_pilot/analysis/metrics.py', 'outputs/runs_pilot/20260128_004724 - P40 g0.10/switch_eval.json', 'cear_pilot/training/train.py', 'cear_pilot/analysis/plot_train_zone_occupancy_early_late.py']
 
 [main]
 version = 0.2.0

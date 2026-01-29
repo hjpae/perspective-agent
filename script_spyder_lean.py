@@ -53,10 +53,6 @@ if __name__ == "__main__":
         sys.argv = [script_name] + BASE_ARGS + ["--seed", str(seed)]
         print(f"\n===== Running seed={seed} =====")
         main()
-    
-#%% plot the zone occupancy 
-
-
 
 #%%
 # script_switch_sweep_eval_spyder.py
@@ -95,7 +91,7 @@ def safe_sleep():
 # -----------------------
 # 1) Checkpoint
 # -----------------------
-TRAIN_ID = "20260128_005607 g0.20"   # <-- change if needed
+TRAIN_ID = "seed5"   # <-- change if needed
 CKPT = PROJECT_ROOT / "outputs" / "runs" / TRAIN_ID / "ckpt.pt"
 assert CKPT.exists(), f"Missing ckpt: {CKPT}"
 
