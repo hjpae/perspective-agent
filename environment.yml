@@ -1,0 +1,36 @@
+name: cear-cemergence
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy>=1.24
+  - pandas>=2.0
+  - matplotlib>=3.7
+  - scikit-learn>=1.3
+  - pyarrow>=14.0
+  - networkx
+  - jupyterlab
+  - ipykernel
+  - pip:
+      - gymnasium>=0.29
+      - pygame>=2.5
+      # install torch under appropriate CUDA version!! 
+      # - torch
+      # - torchvision
+      # - torchaudio
+
+#conda env create -f environment.yml
+#conda activate cear-phase2
+
+#pip install --no-cache-dir torch torchvision torchaudio \
+#  --index-url https://download.pytorch.org/whl/cu128
+
+#python - <<'PY'
+#import torch
+#print(torch.__version__)
+#print(torch.version.cuda)
+#print(torch.cuda.is_available())
+#if torch.cuda.is_available():
+#    print(torch.cuda.get_device_name(0))
+#PY
